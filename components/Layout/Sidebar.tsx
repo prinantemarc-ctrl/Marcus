@@ -33,7 +33,7 @@ import {
 
 // Admin navigation
 const adminNavigation = [
-  { name: "Dashboard", href: "/", icon: HomeIcon, iconSolid: HomeIconSolid },
+  { name: "Dashboard", href: "/admin/dashboard", icon: HomeIcon, iconSolid: HomeIconSolid },
   { name: "Zones", href: "/zones", icon: GlobeAltIcon, iconSolid: GlobeAltIconSolid },
   { name: "Clusters", href: "/clusters", icon: UserGroupIcon, iconSolid: UserGroupIconSolid },
   { name: "3D Map", href: "/clusters/visualization", icon: CubeTransparentIcon, iconSolid: CubeTransparentIconSolid },
