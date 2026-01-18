@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSimulation } from "@/lib/core/storage";
 
+export const dynamic = "force-dynamic";
+
 export interface SpatialCluster {
   id: string;
   name: string;
