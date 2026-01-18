@@ -62,10 +62,16 @@ interface SidebarProps {
   isAdmin?: boolean;
 }
 
-export default function Sidebar({ isAdmin = false }: SidebarProps) {
+export default function Sidebar({ isAdmin }: SidebarProps) {
   const pathname = usePathname();
-  const { data: session } = useSession();
-  const navigation = isAdmin ? adminNavigation : clientNavigation;
+  const { data: session, status } = useSession();
+  
+  // Auto-detect admin based on session role if not explicitly set
+  const isAdminUser = isAdmin ?? session?.user?.role === "ADMIN";
+  const navigation = isAdminUser ? adminNavigation : clientNavigation;
+  
+  // Show loading state while session is loading
+  const isLoading = status === "loading";
 
   const handleLogout = () => {
     signOut({ callbackUrl: "/login" });
@@ -113,7 +119,13 @@ export default function Sidebar({ isAdmin = false }: SidebarProps) {
 
         {/* Navigation */}
         <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
-          {navigation.map((item, index) => {
+          {isLoading ? (
+            <div className="space-y-2">
+              {[...Array(6)].map((_, i) => (
+                <div key={i} className="h-12 bg-white/5 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          ) : navigation.map((item, index) => {
             if (item.name.startsWith("divider")) {
               return <div key={index} className="my-3 border-t border-white/10" />;
             }
