@@ -1,0 +1,238 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================================
+// USERS & AUTHENTICATION
+// ============================================================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  name          String?
+  company       String?
+  role          Role      @default(CLIENT)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  zones              Zone[]
+  simulations        Simulation[]
+  polls              Poll[]
+  simulationRequests SimulationRequest[]
+
+  @@map("users")
+}
+
+enum Role {
+  ADMIN
+  CLIENT
+}
+
+// ============================================================================
+// CORE ENTITIES
+// ============================================================================
+
+model Zone {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  userId      String   @map("user_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clusters    Cluster[]
+  simulations Simulation[]
+  polls       Poll[]
+
+  @@map("zones")
+}
+
+model Cluster {
+  id                String   @id @default(cuid())
+  name              String
+  descriptionPrompt String   @map("description_prompt")
+  weight            Float    @default(0)
+  zoneId            String   @map("zone_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  zone    Zone                @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  agents  Agent[]
+  results SimulationResult[]
+
+  @@map("clusters")
+}
+
+model Agent {
+  id                   String   @id @default(cuid())
+  agentNumber          Int      @map("agent_number")
+  name                 String?
+  age                  Int
+  ageBucketId          String   @map("age_bucket_id")
+  regionId             String   @map("region_id")
+  cspId                String   @map("csp_id")
+  socioDemoDescription String   @map("socio_demo")
+  clusterId            String   @map("cluster_id")
+  traits               String[]
+  priors               String
+  speakingStyle        String   @map("speaking_style")
+  expressionProfile    Json?    @map("expression_profile")
+  psychologicalProfile Json?    @map("psychological_profile")
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  cluster Cluster            @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  results SimulationResult[]
+
+  @@map("agents")
+}
+
+// ============================================================================
+// SIMULATIONS
+// ============================================================================
+
+model Simulation {
+  id               String           @id @default(cuid())
+  title            String
+  scenario         String
+  status           SimulationStatus @default(PENDING)
+  executiveSummary String?          @map("executive_summary")
+  zoneId           String           @map("zone_id")
+  userId           String           @map("user_id")
+  clustersSnapshot Json?            @map("clusters_snapshot")
+  panelSnapshot    Json?            @map("panel_snapshot")
+  createdAt        DateTime         @default(now()) @map("created_at")
+  updatedAt        DateTime         @updatedAt @map("updated_at")
+
+  zone    Zone               @relation(fields: [zoneId], references: [id])
+  user    User               @relation(fields: [userId], references: [id])
+  results SimulationResult[]
+
+  @@map("simulations")
+}
+
+enum SimulationStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model SimulationResult {
+  id           String   @id @default(cuid())
+  simulationId String   @map("simulation_id")
+  agentId      String   @map("agent_id")
+  clusterId    String   @map("cluster_id")
+  turns        Json     // Store reaction turns as JSON
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  simulation Simulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+  agent      Agent      @relation(fields: [agentId], references: [id])
+  cluster    Cluster    @relation(fields: [clusterId], references: [id])
+
+  @@map("simulation_results")
+}
+
+// ============================================================================
+// POLLS
+// ============================================================================
+
+model Poll {
+  id           String     @id @default(cuid())
+  title        String
+  question     String
+  options      Json       // Array of poll options
+  responseMode String     @map("response_mode") // choice, ranking, scoring
+  status       PollStatus @default(PENDING)
+  statistics   Json?      // Calculated statistics
+  zoneId       String     @map("zone_id")
+  userId       String     @map("user_id")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  zone      Zone           @relation(fields: [zoneId], references: [id])
+  user      User           @relation(fields: [userId], references: [id])
+  responses PollResponse[]
+
+  @@map("polls")
+}
+
+enum PollStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model PollResponse {
+  id         String   @id @default(cuid())
+  pollId     String   @map("poll_id")
+  agentId    String   @map("agent_id")
+  response   Json     // The agent's response
+  reasoning  String?
+  confidence Float?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  poll Poll @relation(fields: [pollId], references: [id], onDelete: Cascade)
+
+  @@map("poll_responses")
+}
+
+// ============================================================================
+// CLIENT REQUESTS (for SaaS)
+// ============================================================================
+
+model SimulationRequest {
+  id             String        @id @default(cuid())
+  userId         String        @map("user_id")
+  title          String
+  description    String
+  targetAudience String?       @map("target_audience")
+  objectives     String?
+  status         RequestStatus @default(PENDING)
+  adminNotes     String?       @map("admin_notes")
+  simulationId   String?       @map("simulation_id") // Link to created simulation
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("simulation_requests")
+}
+
+enum RequestStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  IN_PROGRESS
+  COMPLETED
+}
+
+// ============================================================================
+// LLM SETTINGS (per user or global)
+// ============================================================================
+
+model LLMConfig {
+  id        String   @id @default(cuid())
+  name      String   @unique // "default", "openai", "ollama", etc.
+  provider  String   // "openai", "anthropic", "ollama"
+  apiKey    String?  @map("api_key")
+  baseUrl   String?  @map("base_url")
+  model     String
+  isActive  Boolean  @default(false) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("llm_configs")
+}

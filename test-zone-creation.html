@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test Zone Creation</title>
+</head>
+<body>
+  <h1>Test localStorage</h1>
+  <button onclick="testSave()">Test Save</button>
+  <button onclick="testGet()">Test Get</button>
+  <div id="result"></div>
+  <script>
+    function testSave() {
+      const zones = [{ id: 'test1', name: 'Test Zone', createdAt: new Date().toISOString() }];
+      localStorage.setItem('op_zones', JSON.stringify(zones));
+      document.getElementById('result').innerHTML = 'Saved: ' + JSON.stringify(zones);
+    }
+    function testGet() {
+      const data = localStorage.getItem('op_zones');
+      document.getElementById('result').innerHTML = 'Retrieved: ' + data;
+    }
+  </script>
+</body>
+</html>
