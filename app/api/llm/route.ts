@@ -215,13 +215,23 @@ async function callClaude(
   config: LLMConfig
 ): Promise<{ content: string; error?: string }> {
   try {
+    // Use config key or fallback to environment variable
+    const apiKey = config.claudeApiKey || process.env.ANTHROPIC_API_KEY || "";
+    
+    if (!apiKey) {
+      return {
+        content: "",
+        error: "Claude API key not configured. Please add it in Settings or set ANTHROPIC_API_KEY environment variable.",
+      };
+    }
+    
     const response = await fetch(
       "https://api.anthropic.com/v1/messages",
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": config.claudeApiKey || "",
+          "x-api-key": apiKey,
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
