@@ -7,6 +7,7 @@ import Card from "@/components/UI/Card";
 import Button from "@/components/UI/Button";
 import Input from "@/components/UI/Input";
 import GenerationModal from "@/components/UI/GenerationModal";
+import GenerationOverlay from "@/components/UI/GenerationOverlay";
 import WeightEditor from "@/components/UI/WeightEditor";
 import {
   getZone,
@@ -18,7 +19,7 @@ import {
 import { generateClustersForZone } from "@/lib/core/cluster";
 import { generateAgentsBatch } from "@/lib/core/agent";
 import { getLLMConfig, isConfigValid } from "@/lib/core/config";
-import { taskManager } from "@/lib/core/taskManager";
+import { useGeneration } from "@/lib/core/generationContext";
 import type { Zone, Cluster } from "@/types";
 import Link from "next/link";
 import {
@@ -34,6 +35,8 @@ import {
 export default function ZoneDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const { startGeneration, updateGeneration, addGenerationItem, completeGeneration, failGeneration } = useGeneration();
+  
   const [zone, setZone] = useState<Zone | null>(null);
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,7 +47,7 @@ export default function ZoneDetailPage() {
   const [generatingAgents, setGeneratingAgents] = useState(false);
   const [agentCount, setAgentCount] = useState("100");
   
-  // Generation modal state
+  // Legacy modal state (keeping for backwards compatibility)
   const [showModal, setShowModal] = useState(false);
   const [generationStep, setGenerationStep] = useState(0);
   const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 100 });
@@ -103,31 +106,48 @@ export default function ZoneDetailPage() {
       return;
     }
 
-    // Start background task
-    const taskId = taskManager.addTask({
-      type: "cluster",
-      title: `Generating ${count} clusters for "${zone.name}"`,
-      status: "running",
-      progress: 0,
-    });
+    // Start generation with full overlay
+    const genId = startGeneration("cluster", `Generating ${count} clusters for "${zone.name}"`, [
+      "Preparing generation",
+      "Analyzing zone characteristics",
+      "Generating clusters with AI",
+      "Parsing and validating data",
+      "Creating clusters",
+      "Normalizing weights",
+      "Saving to database",
+    ]);
 
-    // Run in background
+    // Run generation
     generateClustersForZone(
       zone.id,
       zone.name,
       llmConfig,
       count,
       zone.description,
-      (stage, current, total) => {
-        const progress = total > 0 ? Math.round((current / total) * 100) : 0;
-        taskManager.updateTask(taskId, {
-          progress,
-          currentStep: stage,
-        });
+      (stage, current, total, item) => {
+        const progress = { current, total };
+        let step = 0;
+        
+        if (stage.includes("Preparing")) step = 0;
+        else if (stage.includes("Analyzing")) step = 1;
+        else if (stage.includes("Generating")) step = 2;
+        else if (stage.includes("Parsing")) step = 3;
+        else if (stage.includes("Creating")) step = 4;
+        else if (stage.includes("Normalizing")) step = 5;
+        else if (stage.includes("Saving") || stage.includes("Complete")) step = 6;
+
+        updateGeneration(genId, { step, progress, currentStepLabel: stage });
+        
+        if (item) {
+          addGenerationItem(genId, {
+            title: item.name,
+            content: item.description.substring(0, 150) + (item.description.length > 150 ? "..." : ""),
+          });
+        }
       }
     )
       .then(() => {
-        taskManager.completeTask(taskId);
+        completeGeneration(genId);
         // Reload clusters
         if (zone) {
           const clustersData = getClustersByZone(zone.id);
@@ -135,7 +155,7 @@ export default function ZoneDetailPage() {
         }
       })
       .catch((err) => {
-        taskManager.failTask(taskId, err instanceof Error ? err.message : "Generation failed");
+        failGeneration(genId, err instanceof Error ? err.message : "Generation failed");
       });
   };
 
@@ -194,26 +214,26 @@ export default function ZoneDetailPage() {
 
     const clustersToProcess = agentsPerCluster.filter((item) => item.count > 0);
 
-    // Start background task
-    const taskId = taskManager.addTask({
-      type: "agent",
-      title: `Generating ${totalAgentsCount} agents for "${zone.name}"`,
-      status: "running",
-      progress: 0,
-    });
+    // Start generation with full overlay
+    const genId = startGeneration("agent", `Generating ${totalAgentsCount} agents for "${zone.name}"`, [
+      "Preparing generation",
+      "Analyzing cluster characteristics",
+      ...clustersToProcess.map(c => `Generating agents for "${c.cluster.name}"`),
+      "Saving to database",
+    ]);
 
-    // Close any modal immediately - navigation continues
-    setShowModal(false);
-
-    // Run generation in background
+    // Run generation
     (async () => {
       try {
+        let totalGenerated = 0;
+        
         for (let i = 0; i < clustersToProcess.length; i++) {
           const { cluster, count } = clustersToProcess[i];
-          const progress = Math.round((i / clustersToProcess.length) * 100);
-          taskManager.updateTask(taskId, {
-            progress,
-            currentStep: `Generating ${count} agents for "${cluster.name}"...`,
+          
+          updateGeneration(genId, {
+            step: i + 2, // +2 for "Preparing" and "Analyzing"
+            progress: { current: totalGenerated, total: totalAgentsCount },
+            currentStepLabel: `Generating ${count} agents for "${cluster.name}"...`,
           });
 
           const demographics = Array.from({ length: count }, () => ({
@@ -229,19 +249,32 @@ export default function ZoneDetailPage() {
             count,
             demographics,
             llmConfig,
-            () => {} // No UI callback needed for background task
+            (stage, current, total, item) => {
+              if (item) {
+                addGenerationItem(genId, {
+                  title: `${cluster.name}: ${item.name}`,
+                  content: item.personality.substring(0, 100) + "...",
+                });
+              }
+              updateGeneration(genId, {
+                progress: { current: totalGenerated + current, total: totalAgentsCount },
+                currentStepLabel: `${cluster.name}: ${stage}`,
+              });
+            }
           );
+          
+          totalGenerated += count;
         }
 
-        taskManager.completeTask(taskId);
+        completeGeneration(genId);
         
-        // Reload clusters to refresh agent counts (in background)
+        // Reload clusters to refresh agent counts
         if (zone) {
           const clustersData = getClustersByZone(zone.id);
           setClusters(clustersData);
         }
       } catch (err) {
-        taskManager.failTask(taskId, err instanceof Error ? err.message : "Generation failed");
+        failGeneration(genId, err instanceof Error ? err.message : "Generation failed");
       }
     })();
   };
@@ -285,6 +318,10 @@ export default function ZoneDetailPage() {
 
   return (
     <MainLayout>
+      {/* Full-screen overlay for cluster/agent generation */}
+      <GenerationOverlay type="cluster" />
+      <GenerationOverlay type="agent" />
+      
       <GenerationModal
         isOpen={showModal}
         onClose={() => {
