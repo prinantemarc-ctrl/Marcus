@@ -6,6 +6,7 @@ import type { Simulation, SimulationConfig, Agent, ReactionResult } from "@/type
 import { getClusters, getCluster } from "./storage";
 import { getAllAgents, getAgentsForCluster } from "./storage";
 import { saveSimulation } from "./storage";
+import { createSimulation as createSimulationAPI, addSimulationResults, updateSimulationAPI } from "./api";
 import { generateReactionsBatch } from "./reaction";
 import { callLLM, formatExecutiveSummaryPrompt } from "./llm";
 import type { LLMConfig } from "./config";
@@ -239,14 +240,55 @@ export async function runSimulation(
     executiveSummary,
   };
 
-  onProgress?.("Saving simulation...", 95, 100);
+  onProgress?.("Saving simulation to database...", 95, 100);
   await new Promise(resolve => setTimeout(resolve, 200));
 
-  // Save simulation
-  saveSimulation(simulation);
+  // Save simulation to Supabase via API
+  try {
+    if (zoneId) {
+      // Create simulation in database
+      const dbSimulation = await createSimulationAPI({
+        title,
+        scenario,
+        zoneId,
+        clustersSnapshot: clusters,
+        panelSnapshot: panel,
+      });
 
-  onProgress?.("Complete!", 100, 100);
-  await new Promise(resolve => setTimeout(resolve, 200));
+      // Add results to database
+      const resultsForAPI = results.map(r => ({
+        agentId: r.agentId,
+        clusterId: r.clusterId,
+        turns: r.turns,
+      }));
+      
+      await addSimulationResults(dbSimulation.id, resultsForAPI);
 
-  return simulation;
+      // Update with executive summary if available
+      if (executiveSummary) {
+        await updateSimulationAPI(dbSimulation.id, { executiveSummary });
+      }
+
+      // Update local simulation with DB ID
+      simulation.id = dbSimulation.id;
+    }
+    
+    // Also save to localStorage for backwards compatibility
+    saveSimulation(simulation);
+
+    onProgress?.("Complete!", 100, 100);
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    return simulation;
+  } catch (apiError) {
+    console.error("API save failed, falling back to localStorage:", apiError);
+    
+    // Fallback to localStorage
+    saveSimulation(simulation);
+
+    onProgress?.("Complete (saved locally)!", 100, 100);
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    return simulation;
+  }
 }

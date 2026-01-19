@@ -6,6 +6,7 @@ import { callLLM, formatAgentPrompt } from "./llm";
 import type { LLMConfig } from "./config";
 import type { Agent } from "@/types";
 import { saveAgentsForCluster, getAgentsForCluster } from "./storage";
+import { createAgentsBatch as createAgentsBatchAPI } from "./api";
 import { AgentSchema } from "@/types";
 
 // ============================================================================
@@ -151,15 +152,49 @@ export async function generateAgentsBatch(
     }
   }
 
-  onProgress?.("Saving agents...", count, count);
+  onProgress?.("Saving agents to database...", count, count);
   await new Promise(resolve => setTimeout(resolve, 300));
 
-  // Save all agents
-  const allAgents = [...existingAgents, ...agents];
-  saveAgentsForCluster(clusterId, allAgents);
+  // Save agents to Supabase via API
+  try {
+    const agentsForAPI = agents.map(a => ({
+      name: a.name,
+      age: a.age,
+      ageBucketId: a.ageBucketId,
+      regionId: a.regionId,
+      cspId: a.cspId,
+      socioDemoDescription: a.socio_demo,
+      traits: a.traits,
+      priors: a.priors,
+      speakingStyle: a.speaking_style,
+      expressionProfile: a.expression_profile,
+      psychologicalProfile: a.psychological_profile,
+    }));
+    
+    const savedAgents = await createAgentsBatchAPI(clusterId, agentsForAPI);
+    
+    // Also save to localStorage for backwards compatibility
+    const allAgents = [...existingAgents, ...agents];
+    saveAgentsForCluster(clusterId, allAgents);
 
-  onProgress?.("Complete!", count, count);
-  await new Promise(resolve => setTimeout(resolve, 200));
+    onProgress?.("Complete!", count, count);
+    await new Promise(resolve => setTimeout(resolve, 200));
 
-  return agents;
+    // Return agents with DB IDs
+    return savedAgents.map((sa, i) => ({
+      ...agents[i],
+      id: sa.id,
+    }));
+  } catch (apiError) {
+    console.error("API save failed, falling back to localStorage:", apiError);
+    
+    // Fallback to localStorage
+    const allAgents = [...existingAgents, ...agents];
+    saveAgentsForCluster(clusterId, allAgents);
+
+    onProgress?.("Complete (saved locally)!", count, count);
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    return agents;
+  }
 }

@@ -6,6 +6,7 @@ import { callLLM } from "./llm";
 import type { LLMConfig } from "./config";
 import type { Cluster } from "@/types";
 import { saveClusters, getClusters } from "./storage";
+import { createClustersBatch } from "./api";
 import { ClusterSchema } from "@/types";
 
 // ============================================================================
@@ -149,16 +150,41 @@ export async function generateClustersForZone(
   onProgress?.("Normalizing weights...", 90, 100);
   await new Promise(resolve => setTimeout(resolve, 200));
 
-  onProgress?.("Saving clusters...", 95, 100);
+  onProgress?.("Saving clusters to database...", 95, 100);
   
-  // Save all clusters
-  const existingClusters = getClusters();
-  const allClusters = [...existingClusters, ...clusters];
-  saveClusters(allClusters);
+  // Save clusters to Supabase via API
+  try {
+    const clustersForAPI = clusters.map(c => ({
+      name: c.name,
+      descriptionPrompt: c.description_prompt,
+      weight: c.weight,
+    }));
+    
+    const savedClusters = await createClustersBatch(zoneId, clustersForAPI);
+    
+    // Also save to localStorage for backwards compatibility during migration
+    const existingClusters = getClusters();
+    const allClusters = [...existingClusters, ...clusters];
+    saveClusters(allClusters);
 
-  await new Promise(resolve => setTimeout(resolve, 200));
-  
-  onProgress?.("Complete!", 100, 100);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
+    onProgress?.("Complete!", 100, 100);
 
-  return clusters;
+    // Return the saved clusters with DB IDs
+    return savedClusters.map((sc, i) => ({
+      ...clusters[i],
+      id: sc.id, // Use the database ID
+    }));
+  } catch (apiError) {
+    console.error("API save failed, falling back to localStorage:", apiError);
+    
+    // Fallback to localStorage only
+    const existingClusters = getClusters();
+    const allClusters = [...existingClusters, ...clusters];
+    saveClusters(allClusters);
+    
+    onProgress?.("Complete (saved locally)!", 100, 100);
+    return clusters;
+  }
 }

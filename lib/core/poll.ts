@@ -6,6 +6,7 @@ import type { PollConfig, PollResult, PollResponse, Agent, Cluster } from "@/typ
 import { getZones, getZone } from "./storage";
 import { getClusters, getClustersByZone } from "./storage";
 import { getAllAgents, getAgentsForCluster } from "./storage";
+import { createPoll as createPollAPI, addPollResponses, updatePollAPI } from "./api";
 import { callLLM } from "./llm";
 import type { LLMConfig } from "./config";
 import { PollResultSchema, PollResponseSchema } from "@/types";
@@ -445,12 +446,53 @@ export async function runPoll(
 
   // Save poll
   const validated = PollResultSchema.parse(pollResult);
-  savePoll(validated);
+  
+  // Save poll to Supabase via API
+  try {
+    const dbPoll = await createPollAPI({
+      title,
+      question: config.question,
+      options: config.options,
+      responseMode: config.responseMode,
+      zoneId: config.zoneId,
+    });
 
-  onProgress?.("Complete!", 100, 100);
-  await new Promise(resolve => setTimeout(resolve, 200));
+    // Add responses to database
+    const responsesForAPI = validated.responses.map(r => ({
+      agentId: r.agentId,
+      response: r.response,
+      reasoning: r.reasoning,
+      confidence: r.confidence,
+    }));
+    
+    await addPollResponses(dbPoll.id, responsesForAPI);
 
-  return validated;
+    // Update with statistics
+    if (validated.statistics) {
+      await updatePollAPI(dbPoll.id, { statistics: validated.statistics });
+    }
+
+    // Update local poll with DB ID
+    validated.id = dbPoll.id;
+    
+    // Also save to localStorage for backwards compatibility
+    savePoll(validated);
+
+    onProgress?.("Complete!", 100, 100);
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    return validated;
+  } catch (apiError) {
+    console.error("API save failed, falling back to localStorage:", apiError);
+    
+    // Fallback to localStorage
+    savePoll(validated);
+
+    onProgress?.("Complete (saved locally)!", 100, 100);
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    return validated;
+  }
 }
 
 // ============================================================================
