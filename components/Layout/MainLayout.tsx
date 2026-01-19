@@ -1,6 +1,7 @@
 "use client";
 
 import Sidebar from "./Sidebar";
+import TaskPanel from "@/components/UI/TaskPanel";
 
 export default function MainLayout({
   children,
@@ -15,6 +16,8 @@ export default function MainLayout({
           {children}
         </div>
       </main>
+      {/* Background Task Panel */}
+      <TaskPanel />
     </div>
   );
 }
