@@ -101,9 +101,12 @@ Opinion cluster: ${clusterDescription}
   }
 
   prompt += `
-Generate a virtual agent with the following characteristics in JSON format:
+Generate a virtual agent with the following characteristics in JSON format.
+
+IMPORTANT: Generate a UNIQUE and DIVERSE name. Use a wide variety of first names and family names appropriate to the region/culture. AVOID repeating common surnames - each agent should have a distinctive name combination.
+
 {
-  "name": "First Last",
+  "name": "First Last (use diverse, unique names - avoid repetition)",
   "age": number between 18 and 80,
   "socio_demo": "short description of the socio-demographic situation",
   "traits": ["trait1", "trait2", "trait3"],
