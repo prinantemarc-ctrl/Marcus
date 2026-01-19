@@ -193,13 +193,28 @@ ${context ? `\nAdditional context: ${context}` : ""}
 
 You MUST generate a valid JSON reaction. Follow these rules EXACTLY:
 
+CRITICAL EMOTION RULES:
+The "emotion" field MUST be EXACTLY one of these 9 words (no variations!):
+- anger (frustration, annoyance)
+- fear (worry, caution, anxiety)  
+- hope (optimism, confidence)
+- cynicism (skepticism, doubt)
+- pride (satisfaction, confidence)
+- sadness (disappointment, resignation)
+- indifference (neutrality, pragmatism)
+- enthusiasm (excitement, eagerness)
+- mistrust (suspicion, wariness)
+
+DO NOT use: "pragmatic", "cautious", "neutral", "mixed", "concerned", "optimistic", etc.
+Map your intended emotion to one of the 9 valid options above.
+
 REQUIRED JSON STRUCTURE:
 {
   "stance_score": <number 0-100>,
   "confidence": <number 0-100>,
-  "emotion": "<one of: anger, fear, hope, cynicism, pride, sadness, indifference, enthusiasm, mistrust>",
+  "emotion": "<MUST be exactly one of: anger, fear, hope, cynicism, pride, sadness, indifference, enthusiasm, mistrust>",
   "key_reasons": ["<reason1>", "<reason2>", "<reason3>"],
-  "response": "<text EXACTLY 80-160 characters - count carefully!>",
+  "response": "<text 80-200 characters expressing the agent's view>",
   "true_belief": {
     "inner_stance_score": <number 0-100>,
     "cognitive_biases": ["<bias1>", "<bias2>"],
