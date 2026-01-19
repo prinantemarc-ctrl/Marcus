@@ -22,7 +22,7 @@ export default function SettingsPage() {
     ollamaUrl: "http://localhost:11434",
     ollamaModel: "llama3.1:8b",
     openaiModel: "gpt-4",
-    claudeModel: "claude-3-5-sonnet-20241022",
+    claudeModel: "claude-sonnet-4-20250514",
   });
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
@@ -254,7 +254,7 @@ export default function SettingsPage() {
                 />
                 <Input
                   label="Model"
-                  placeholder="claude-3-5-sonnet-20241022"
+                  placeholder="claude-sonnet-4-20250514"
                   value={config.claudeModel || ""}
                   onChange={(e) =>
                     setConfig({ ...config, claudeModel: e.target.value })

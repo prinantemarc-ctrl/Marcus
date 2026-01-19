@@ -64,7 +64,7 @@ export function getLLMConfig(): LLMConfig {
     ollamaUrl: "http://localhost:11434",
     ollamaModel: "llama3.1:8b",
     openaiModel: "gpt-4",
-    claudeModel: "claude-3-5-sonnet-20241022",
+    claudeModel: "claude-sonnet-4-20250514",
   });
 }
 
