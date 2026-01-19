@@ -18,6 +18,7 @@ import {
 import { generateClustersForZone } from "@/lib/core/cluster";
 import { generateAgentsBatch } from "@/lib/core/agent";
 import { getLLMConfig, isConfigValid } from "@/lib/core/config";
+import { taskManager } from "@/lib/core/taskManager";
 import type { Zone, Cluster } from "@/types";
 import Link from "next/link";
 import {
@@ -87,18 +88,10 @@ export default function ZoneDetailPage() {
     if (!zone) return;
 
     setError("");
-    setGenerating(true);
-    setShowModal(true);
-    setGenerationType("clusters");
-    setGenerationStep(0);
-    setGeneratedItems([]);
-    setGenerationProgress({ current: 0, total: 100 });
 
     const count = parseInt(clusterCount);
     if (isNaN(count) || count < 1 || count > 20) {
       setError("Number of clusters must be between 1 and 20");
-      setGenerating(false);
-      setShowModal(false);
       return;
     }
 
@@ -106,65 +99,44 @@ export default function ZoneDetailPage() {
     const llmConfig = getLLMConfig();
     if (!isConfigValid(llmConfig)) {
       setError("Invalid LLM configuration. Please configure the LLM in settings.");
-      setGenerating(false);
-      setShowModal(false);
       router.push("/settings");
       return;
     }
 
-    try {
-      await generateClustersForZone(
-        zone.id,
-        zone.name,
-        llmConfig,
-        count,
-        zone.description,
-        (stage, current, total, item) => {
-          setGenerationProgress({ current, total });
-          
-          // Update step based on stage
-          if (stage.includes("Preparing")) {
-            setGenerationStep(0);
-          } else if (stage.includes("Analyzing")) {
-            setGenerationStep(1);
-          } else if (stage.includes("Generating")) {
-            setGenerationStep(2);
-          } else if (stage.includes("Parsing")) {
-            setGenerationStep(3);
-          } else if (stage.includes("Creating")) {
-            setGenerationStep(4);
-            if (item) {
-              setGeneratedItems((prev) => [
-                ...prev,
-                {
-                  title: item.name,
-                  content: item.description.substring(0, 100) + "...",
-                },
-              ]);
-            }
-          } else if (stage.includes("Normalizing")) {
-            setGenerationStep(5);
-          } else if (stage.includes("Saving")) {
-            setGenerationStep(6);
-          } else if (stage.includes("Complete")) {
-            setGenerationStep(6);
-          }
-        }
-      );
+    // Start background task
+    const taskId = taskManager.addTask({
+      type: "cluster",
+      title: `Generating ${count} clusters for "${zone.name}"`,
+      status: "running",
+      progress: 0,
+    });
 
-      // Reload clusters
-      const clustersData = getClustersByZone(zone.id);
-      setClusters(clustersData);
-      
-      setTimeout(() => {
-        setGenerating(false);
-        setShowModal(false);
-      }, 1000);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error generating clusters");
-      setGenerating(false);
-      setShowModal(false);
-    }
+    // Run in background
+    generateClustersForZone(
+      zone.id,
+      zone.name,
+      llmConfig,
+      count,
+      zone.description,
+      (stage, current, total) => {
+        const progress = total > 0 ? Math.round((current / total) * 100) : 0;
+        taskManager.updateTask(taskId, {
+          progress,
+          currentStep: stage,
+        });
+      }
+    )
+      .then(() => {
+        taskManager.completeTask(taskId);
+        // Reload clusters
+        if (zone) {
+          const clustersData = getClustersByZone(zone.id);
+          setClusters(clustersData);
+        }
+      })
+      .catch((err) => {
+        taskManager.failTask(taskId, err instanceof Error ? err.message : "Generation failed");
+      });
   };
 
   const handleSaveWeights = (weights: Map<string, number>) => {
@@ -180,17 +152,10 @@ export default function ZoneDetailPage() {
     if (!zone || clusters.length === 0) return;
 
     setError("");
-    setGeneratingAgents(true);
-    setShowModal(true);
-    setGenerationType("agents");
-    setGenerationStep(0);
-    setGeneratedItems([]);
 
-    const totalAgents = parseInt(agentCount);
-    if (isNaN(totalAgents) || totalAgents < 1 || totalAgents > 1000) {
+    const totalAgentsCount = parseInt(agentCount);
+    if (isNaN(totalAgentsCount) || totalAgentsCount < 1 || totalAgentsCount > 1000) {
       setError("Total number of agents must be between 1 and 1000");
-      setGeneratingAgents(false);
-      setShowModal(false);
       return;
     }
 
@@ -198,18 +163,14 @@ export default function ZoneDetailPage() {
     const llmConfig = getLLMConfig();
     if (!isConfigValid(llmConfig)) {
       setError("Invalid LLM configuration. Please configure the LLM in settings.");
-      setGeneratingAgents(false);
-      setShowModal(false);
       router.push("/settings");
       return;
     }
 
     // Calculate total weight
-    const totalWeight = clusters.reduce((sum, c) => sum + c.weight, 0);
-    if (totalWeight === 0) {
+    const totalWeightCalc = clusters.reduce((sum, c) => sum + c.weight, 0);
+    if (totalWeightCalc === 0) {
       setError("Cluster weights must be set. Please edit cluster weights first.");
-      setGeneratingAgents(false);
-      setShowModal(false);
       return;
     }
 
@@ -220,75 +181,69 @@ export default function ZoneDetailPage() {
     for (let i = 0; i < clusters.length; i++) {
       const cluster = clusters[i];
       if (i === clusters.length - 1) {
-        // Last cluster gets the remainder to ensure exact total
         agentsPerCluster.push({
           cluster,
-          count: totalAgents - allocatedAgents,
+          count: totalAgentsCount - allocatedAgents,
         });
       } else {
-        const count = Math.floor((cluster.weight / totalWeight) * totalAgents);
+        const count = Math.floor((cluster.weight / totalWeightCalc) * totalAgentsCount);
         agentsPerCluster.push({ cluster, count });
         allocatedAgents += count;
       }
     }
 
-    // Calculate total clusters to process
     const clustersToProcess = agentsPerCluster.filter((item) => item.count > 0);
-    setGenerationProgress({ current: 0, total: clustersToProcess.length });
 
-    try {
-      setGenerationStep(2);
+    // Start background task
+    const taskId = taskManager.addTask({
+      type: "agent",
+      title: `Generating ${totalAgentsCount} agents for "${zone.name}"`,
+      status: "running",
+      progress: 0,
+    });
 
-      for (let i = 0; i < clustersToProcess.length; i++) {
-        const { cluster, count } = clustersToProcess[i];
-        setGenerationProgress({ current: i, total: clustersToProcess.length });
+    // Close any modal immediately - navigation continues
+    setShowModal(false);
 
-        const demographics = Array.from({ length: count }, () => ({
-          ageBucketId: "default",
-          regionId: "default",
-          cspId: "default",
-          age: Math.floor(Math.random() * 50) + 25,
-        }));
+    // Run generation in background
+    (async () => {
+      try {
+        for (let i = 0; i < clustersToProcess.length; i++) {
+          const { cluster, count } = clustersToProcess[i];
+          const progress = Math.round((i / clustersToProcess.length) * 100);
+          taskManager.updateTask(taskId, {
+            progress,
+            currentStep: `Generating ${count} agents for "${cluster.name}"...`,
+          });
 
-        await generateAgentsBatch(
-          cluster.id,
-          cluster.description_prompt,
-          count,
-          demographics,
-          llmConfig,
-          (stage, current, total, item) => {
-            if (item) {
-              setGeneratedItems((prev) => [
-                ...prev,
-                {
-                  title: `${cluster.name}: ${item.name}`,
-                  content: item.personality.substring(0, 100) + "...",
-                },
-              ]);
-            }
-          }
-        );
+          const demographics = Array.from({ length: count }, () => ({
+            ageBucketId: "default",
+            regionId: "default",
+            cspId: "default",
+            age: Math.floor(Math.random() * 50) + 25,
+          }));
+
+          await generateAgentsBatch(
+            cluster.id,
+            cluster.description_prompt,
+            count,
+            demographics,
+            llmConfig,
+            () => {} // No UI callback needed for background task
+          );
+        }
+
+        taskManager.completeTask(taskId);
+        
+        // Reload clusters to refresh agent counts (in background)
+        if (zone) {
+          const clustersData = getClustersByZone(zone.id);
+          setClusters(clustersData);
+        }
+      } catch (err) {
+        taskManager.failTask(taskId, err instanceof Error ? err.message : "Generation failed");
       }
-
-      setGenerationStep(4);
-      setGenerationProgress({
-        current: clustersToProcess.length,
-        total: clustersToProcess.length,
-      });
-
-      // Reload clusters to refresh agent counts
-      const clustersData = getClustersByZone(zone.id);
-      setClusters(clustersData);
-
-      setTimeout(() => {
-        setGeneratingAgents(false);
-        setShowModal(false);
-      }, 1000);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error generating agents");
-      setGeneratingAgents(false);
-      setShowModal(false);
-    }
+    })();
   };
 
 

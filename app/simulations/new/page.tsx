@@ -11,6 +11,7 @@ import GenerationModal from "@/components/UI/GenerationModal";
 import { getClusters, getAllAgents, getZones } from "@/lib/core/storage";
 import { runSimulation } from "@/lib/core/simulation";
 import { getLLMConfig, isConfigValid } from "@/lib/core/config";
+import { taskManager } from "@/lib/core/taskManager";
 import { ArrowLeftIcon } from "@heroicons/react/24/outline";
 import Link from "next/link";
 import type { SimulationConfig } from "@/types";
@@ -49,6 +50,96 @@ export default function NewSimulationPage() {
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+
+    if (!formData.title.trim()) {
+      setError("Title is required");
+      return;
+    }
+    if (!formData.scenario.trim()) {
+      setError("Scenario is required");
+      return;
+    }
+
+    const nAgents = parseInt(formData.nAgents);
+    if (isNaN(nAgents) || nAgents < 1 || nAgents > 1000) {
+      setError("Number of agents must be between 1 and 1000");
+      return;
+    }
+
+    // Check LLM config
+    const llmConfig = getLLMConfig();
+    if (!isConfigValid(llmConfig)) {
+      setError("Invalid LLM configuration. Please configure the LLM in settings.");
+      router.push("/settings");
+      return;
+    }
+
+    const config: SimulationConfig = {
+      nAgents,
+      allocationMode: "useClusterWeights",
+      multiTurn: {
+        enabled: false,
+        turns: 1,
+        mediaSummaryMode: "generated",
+      },
+      influence: {
+        enabled: false,
+        exposurePct: 0,
+        exposureType: "rumor",
+        exposureContentMode: "generated",
+      },
+    };
+
+    // Start background task
+    const taskId = taskManager.addTask({
+      type: "simulation",
+      title: `Running simulation: "${formData.title.trim()}"`,
+      status: "running",
+      progress: 0,
+    });
+
+    // Redirect immediately
+    router.push("/simulations");
+
+    // Run in background
+    runSimulation(
+      formData.title.trim(),
+      formData.scenario.trim(),
+      formData.zoneId || undefined,
+      config,
+      llmConfig,
+      (stage, current, total) => {
+        const progress = total > 0 ? Math.round((current / total) * 100) : 0;
+        taskManager.updateTask(taskId, {
+          progress,
+          currentStep: stage,
+        });
+      }
+    )
+      .then(() => {
+        taskManager.completeTask(taskId);
+      })
+      .catch((err) => {
+        let errorMessage = "Error generating simulation";
+        
+        if (err instanceof Error) {
+          errorMessage = err.message;
+          
+          // Format multi-line error messages for better display
+          if (errorMessage.includes('\n')) {
+            const lines = errorMessage.split('\n');
+            errorMessage = lines[0] + (lines.length > 1 ? ` (${lines.length - 1} more details)` : '');
+          }
+        }
+        
+        taskManager.failTask(taskId, errorMessage);
+      });
+  };
+
+  // Legacy function for non-background mode (kept for reference)
+  const handleSubmitLegacy = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);

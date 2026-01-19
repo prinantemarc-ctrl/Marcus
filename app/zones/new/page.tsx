@@ -10,6 +10,7 @@ import Textarea from "@/components/UI/Textarea";
 import { saveZones, getZones } from "@/lib/core/storage";
 import { generateClustersForZone } from "@/lib/core/cluster";
 import { getLLMConfig, isConfigValid } from "@/lib/core/config";
+import { taskManager } from "@/lib/core/taskManager";
 import type { Zone } from "@/types";
 import { ZoneSchema } from "@/types";
 import { ArrowLeftIcon } from "@heroicons/react/24/outline";
@@ -128,68 +129,47 @@ export default function NewZonePage() {
       return;
     }
     
-    setShowClusterModal(false);
-    setShowGenerationModal(true);
-    setGenerationStep(0);
-    setGeneratedItems([]);
-    setGenerationProgress({ current: 0, total: 100 });
-    setError("");
-    
-    try {
-      const zone = getZones().find(z => z.id === createdZoneId);
-      if (!zone) {
-        throw new Error("Zone not found");
-      }
-      
-      // Use AI-determined count (default 5) or user-specified count
-      const finalCount = useAICount ? 5 : count!;
-      
-      await generateClustersForZone(
-        zone.id,
-        zone.name,
-        llmConfig,
-        finalCount,
-        zone.description,
-        (stage, current, total, item) => {
-          setGenerationProgress({ current, total });
-          
-          if (stage.includes("Preparing")) {
-            setGenerationStep(1);
-          } else if (stage.includes("Analyzing")) {
-            setGenerationStep(2);
-          } else if (stage.includes("Generating")) {
-            setGenerationStep(3);
-          } else if (stage.includes("Parsing")) {
-            setGenerationStep(4);
-          } else if (stage.includes("Creating")) {
-            setGenerationStep(5);
-            if (item) {
-              setGeneratedItems((prev) => [
-                ...prev,
-                {
-                  title: item.name,
-                  content: item.description.substring(0, 100) + "...",
-                },
-              ]);
-            }
-          } else if (stage.includes("Normalizing")) {
-            setGenerationStep(6);
-          } else if (stage.includes("Saving") || stage.includes("Complete")) {
-            setGenerationStep(7);
-          }
-        }
-      );
-      
-      // Small delay to show completion
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Redirect to zone detail page
-      window.location.href = `/zones/${createdZoneId}`;
-    } catch (err) {
-      console.error("Error generating clusters:", err);
-      setError(err instanceof Error ? err.message : "Failed to generate clusters");
-      setShowGenerationModal(false);
+    const zone = getZones().find(z => z.id === createdZoneId);
+    if (!zone) {
+      setError("Zone not found");
+      return;
     }
+    
+    const finalCount = useAICount ? 5 : count!;
+    
+    // Start background task
+    const taskId = taskManager.addTask({
+      type: "cluster",
+      title: `Generating ${finalCount} clusters for "${zone.name}"`,
+      status: "running",
+      progress: 0,
+    });
+    
+    // Close modal and redirect immediately
+    setShowClusterModal(false);
+    router.push(`/zones/${createdZoneId}`);
+    
+    // Run generation in background
+    generateClustersForZone(
+      zone.id,
+      zone.name,
+      llmConfig,
+      finalCount,
+      zone.description,
+      (stage, current, total) => {
+        const progress = total > 0 ? Math.round((current / total) * 100) : 0;
+        taskManager.updateTask(taskId, {
+          progress,
+          currentStep: stage,
+        });
+      }
+    )
+      .then(() => {
+        taskManager.completeTask(taskId);
+      })
+      .catch((err) => {
+        taskManager.failTask(taskId, err instanceof Error ? err.message : "Generation failed");
+      });
   };
 
   const handleSkipClusterGeneration = () => {

@@ -11,6 +11,7 @@ import GenerationModal from "@/components/UI/GenerationModal";
 import { getZones } from "@/lib/core/storage";
 import { runPoll } from "@/lib/core/poll";
 import { getLLMConfig, isConfigValid } from "@/lib/core/config";
+import { taskManager } from "@/lib/core/taskManager";
 import { ArrowLeftIcon, PlusIcon, TrashIcon } from "@heroicons/react/24/outline";
 import Link from "next/link";
 import type { PollConfig, PollOption } from "@/types";
@@ -77,37 +78,24 @@ export default function NewPollPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    setLoading(true);
-    setShowModal(true);
-    setGenerationStep(0);
-    setGeneratedItems([]);
-    setGenerationProgress({ current: 0, total: 100 });
 
     // Validation
     if (!formData.title.trim()) {
       setError("Title is required");
-      setLoading(false);
-      setShowModal(false);
       return;
     }
     if (!formData.question.trim()) {
       setError("Question is required");
-      setLoading(false);
-      setShowModal(false);
       return;
     }
     if (!formData.zoneId) {
       setError("Zone is required");
-      setLoading(false);
-      setShowModal(false);
       return;
     }
 
     const validOptions = options.filter((opt) => opt.name.trim() !== "");
     if (validOptions.length < 2) {
       setError("You need at least 2 valid options");
-      setLoading(false);
-      setShowModal(false);
       return;
     }
 
@@ -115,65 +103,51 @@ export default function NewPollPage() {
     const llmConfig = getLLMConfig();
     if (!isConfigValid(llmConfig)) {
       setError("Invalid LLM configuration. Please configure the LLM in settings.");
-      setLoading(false);
-      setShowModal(false);
       router.push("/settings");
       return;
     }
 
-    try {
-      const config: PollConfig = {
-        question: formData.question.trim(),
-        options: validOptions.map((opt) => ({
-          id: opt.id,
-          name: opt.name.trim(),
-          description: opt.description?.trim() || undefined,
-        })),
-        responseMode: formData.responseMode,
-        zoneId: formData.zoneId,
-      };
+    const config: PollConfig = {
+      question: formData.question.trim(),
+      options: validOptions.map((opt) => ({
+        id: opt.id,
+        name: opt.name.trim(),
+        description: opt.description?.trim() || undefined,
+      })),
+      responseMode: formData.responseMode,
+      zoneId: formData.zoneId,
+    };
 
-      await runPoll(
-        formData.title.trim(),
-        config,
-        llmConfig,
-        (stage, current, total, item) => {
-          setGenerationProgress({ current, total });
+    // Start background task
+    const taskId = taskManager.addTask({
+      type: "poll",
+      title: `Running poll: "${formData.title.trim()}"`,
+      status: "running",
+      progress: 0,
+    });
 
-          if (stage.includes("Preparing")) {
-            setGenerationStep(0);
-          } else if (stage.includes("Loading")) {
-            setGenerationStep(1);
-          } else if (stage.includes("Generating")) {
-            setGenerationStep(2);
-            if (item) {
-              setGeneratedItems((prev) => [
-                ...prev,
-                {
-                  title: item.agentName,
-                  content: item.response,
-                },
-              ]);
-            }
-          } else if (stage.includes("Calculating")) {
-            setGenerationStep(3);
-          } else if (stage.includes("Saving")) {
-            setGenerationStep(4);
-          } else if (stage.includes("Complete")) {
-            setGenerationStep(4);
-          }
-        }
-      );
+    // Redirect immediately
+    router.push("/polls");
 
-      setTimeout(() => {
-        setLoading(false);
-        router.push("/polls");
-      }, 1000);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error creating poll");
-      setLoading(false);
-      setShowModal(false);
-    }
+    // Run in background
+    runPoll(
+      formData.title.trim(),
+      config,
+      llmConfig,
+      (stage, current, total) => {
+        const progress = total > 0 ? Math.round((current / total) * 100) : 0;
+        taskManager.updateTask(taskId, {
+          progress,
+          currentStep: stage,
+        });
+      }
+    )
+      .then(() => {
+        taskManager.completeTask(taskId);
+      })
+      .catch((err) => {
+        taskManager.failTask(taskId, err instanceof Error ? err.message : "Poll failed");
+      });
   };
 
   if (zones.length === 0) {
