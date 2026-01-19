@@ -100,18 +100,59 @@ Opinion cluster: ${clusterDescription}
     if (demographics.socioClass) prompt += `- Socio-professional class: ${demographics.socioClass}\n`;
   }
 
+  // Add randomness seed for variety
+  const personalityVariants = [
+    "introvert who prefers written communication",
+    "extrovert who loves debates",
+    "pragmatic professional focused on results",
+    "idealist driven by principles",
+    "skeptic who questions everything",
+    "traditionalist valuing heritage",
+    "innovator embracing change",
+    "mediator seeking consensus",
+    "activist pushing for reform",
+    "observer who analyzes before speaking"
+  ];
+  const randomPersonality = personalityVariants[Math.floor(Math.random() * personalityVariants.length)];
+  
+  const backgroundVariants = [
+    "self-made entrepreneur",
+    "academic researcher",
+    "government employee",
+    "small business owner",
+    "corporate manager",
+    "freelance professional",
+    "retired expert",
+    "young graduate",
+    "community leader",
+    "technical specialist"
+  ];
+  const randomBackground = backgroundVariants[Math.floor(Math.random() * backgroundVariants.length)];
+
   prompt += `
 Generate a virtual agent with the following characteristics in JSON format.
 
-IMPORTANT: Generate a UNIQUE and DIVERSE name. Use a wide variety of first names and family names appropriate to the region/culture. AVOID repeating common surnames - each agent should have a distinctive name combination.
+CRITICAL INSTRUCTIONS FOR UNIQUENESS:
+1. NAME: Generate a COMPLETELY UNIQUE name. Use diverse surnames from the region (NOT Al-Mansouri, Al-Rashid, or common names). Mix traditional and modern names.
+2. PERSONALITY: This agent is a ${randomPersonality} with background as ${randomBackground}.
+3. PRIORS/BIO: Write a DISTINCTIVE biography that:
+   - Does NOT start with "Champions" or "Values" or "Supports"
+   - Uses VARIED sentence structures
+   - Mentions specific personal experiences or anecdotes
+   - Includes nuanced, even contradictory viewpoints
+   - Feels like a REAL person, not a category description
+4. TRAITS: Choose unusual, specific traits (not just "traditional" or "modern")
+
+BAD example of priors: "Champions free market economics and diversification. Values efficiency."
+GOOD example of priors: "After losing his family's textile business to foreign competition, developed complex views on globalization - sees both opportunity and threat. Weekend chess player who applies strategic thinking to politics."
 
 {
-  "name": "First Last (use diverse, unique names - avoid repetition)",
+  "name": "First Last (UNIQUE - avoid Al-Mansouri, Al-Rashid, common names)",
   "age": number between 18 and 80,
-  "socio_demo": "short description of the socio-demographic situation",
-  "traits": ["trait1", "trait2", "trait3"],
-  "priors": "detailed description of the agent's opinions and values (80-160 characters)",
-  "speaking_style": "communication style (e.g., direct, nuanced, emotional, etc.)",
+  "socio_demo": "specific situation with personal details",
+  "traits": ["specific_trait1", "specific_trait2", "specific_trait3"],
+  "priors": "UNIQUE biography with personal story, specific experiences, nuanced views (100-180 chars). NO generic statements.",
+  "speaking_style": "specific style (e.g., 'uses sports metaphors', 'speaks in questions', 'dry humor')",
   "expression_profile": {
     "directness": number between 0 and 100,
     "social_filter": number between 0 and 100,
@@ -119,8 +160,8 @@ IMPORTANT: Generate a UNIQUE and DIVERSE name. Use a wide variety of first names
     "context_sensitivity": "high" | "medium" | "low"
   },
   "psychological_profile": {
-    "core_values": ["value1", "value2"],
-    "cognitive_biases": ["bias1", "bias2"],
+    "core_values": ["specific_value1", "specific_value2"],
+    "cognitive_biases": ["specific_bias1", "specific_bias2"],
     "risk_tolerance": number between 0 and 100,
     "assertiveness": number between 0 and 100
   }
