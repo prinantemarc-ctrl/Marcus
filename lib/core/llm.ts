@@ -78,29 +78,36 @@ export async function callLLM(
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+// Track used names across generations for uniqueness
+const usedFirstNames = new Set<string>();
+const usedLastNames = new Set<string>();
+
 export function formatAgentPrompt(
   clusterDescription: string,
   demographics?: {
     age?: number;
     region?: string;
     socioClass?: string;
+    agentIndex?: number;
+    forbiddenFirstNames?: string[];
+    forbiddenLastNames?: string[];
   }
 ): string {
-  let prompt = `You are a virtual agent generator for an opinion simulation.
+  // Age range based on agent index for diversity
+  const ageRanges = [
+    { min: 25, max: 32, label: "young professional" },
+    { min: 33, max: 42, label: "mid-career" },
+    { min: 43, max: 55, label: "experienced senior" },
+    { min: 56, max: 70, label: "veteran/elder" },
+  ];
+  const ageRange = ageRanges[(demographics?.agentIndex || 0) % ageRanges.length];
+  const suggestedAge = demographics?.age || (Math.floor(Math.random() * (ageRange.max - ageRange.min + 1)) + ageRange.min);
 
-Opinion cluster: ${clusterDescription}
+  // Forbidden names from tracking
+  const forbiddenFirst = demographics?.forbiddenFirstNames || Array.from(usedFirstNames).slice(-10);
+  const forbiddenLast = demographics?.forbiddenLastNames || Array.from(usedLastNames).slice(-10);
 
-`;
-
-  if (demographics) {
-    prompt += `Demographics:
-`;
-    if (demographics.age) prompt += `- Age: ${demographics.age} years\n`;
-    if (demographics.region) prompt += `- Region: ${demographics.region}\n`;
-    if (demographics.socioClass) prompt += `- Socio-professional class: ${demographics.socioClass}\n`;
-  }
-
-  // Add randomness seed for variety
+  // Random personality and background for variety
   const personalityVariants = [
     "introvert who prefers written communication",
     "extrovert who loves debates",
@@ -111,65 +118,107 @@ Opinion cluster: ${clusterDescription}
     "innovator embracing change",
     "mediator seeking consensus",
     "activist pushing for reform",
-    "observer who analyzes before speaking"
+    "observer who analyzes before speaking",
+    "storyteller who uses anecdotes",
+    "data-driven analyst",
+    "community-focused collaborator",
+    "independent thinker"
   ];
   const randomPersonality = personalityVariants[Math.floor(Math.random() * personalityVariants.length)];
   
-  const backgroundVariants = [
-    "self-made entrepreneur",
-    "academic researcher",
-    "government employee",
-    "small business owner",
-    "corporate manager",
-    "freelance professional",
-    "retired expert",
-    "young graduate",
-    "community leader",
-    "technical specialist"
+  const speakingStyles = [
+    "uses sports metaphors",
+    "speaks in questions",
+    "dry humor and irony",
+    "formal and measured",
+    "casual street slang",
+    "academic precision",
+    "emotional and passionate",
+    "uses proverbs and sayings",
+    "technical analogies",
+    "storytelling with anecdotes",
+    "diplomatic and careful",
+    "direct and blunt"
   ];
-  const randomBackground = backgroundVariants[Math.floor(Math.random() * backgroundVariants.length)];
+  const randomStyle = speakingStyles[Math.floor(Math.random() * speakingStyles.length)];
 
-  prompt += `
-Generate a virtual agent with the following characteristics in JSON format.
+  let prompt = `You are generating a UNIQUE virtual agent for an opinion simulation.
 
-CRITICAL INSTRUCTIONS FOR UNIQUENESS:
-1. NAME: Generate a COMPLETELY UNIQUE name. Use diverse surnames from the region (NOT Al-Mansouri, Al-Rashid, or common names). Mix traditional and modern names.
-2. PERSONALITY: This agent is a ${randomPersonality} with background as ${randomBackground}.
-3. PRIORS/BIO: Write a DISTINCTIVE biography that:
-   - Does NOT start with "Champions" or "Values" or "Supports"
-   - Uses VARIED sentence structures
-   - Mentions specific personal experiences or anecdotes
-   - Includes nuanced, even contradictory viewpoints
-   - Feels like a REAL person, not a category description
-4. TRAITS: Choose unusual, specific traits (not just "traditional" or "modern")
+Cluster: ${clusterDescription}
+${demographics?.region ? `Region: ${demographics.region}` : ""}
 
-BAD example of priors: "Champions free market economics and diversification. Values efficiency."
-GOOD example of priors: "After losing his family's textile business to foreign competition, developed complex views on globalization - sees both opportunity and threat. Weekend chess player who applies strategic thinking to politics."
+CRITICAL UNIQUENESS RULES:
 
+1. NAME MUST BE UNIQUE:
+   DO NOT use these first names: ${forbiddenFirst.join(", ") || "none specified"}
+   DO NOT use these last names: ${forbiddenLast.join(", ") || "none specified"}
+   
+   NAME POOLS (choose creatively, MIX different origins):
+   - Emirati: Saif, Rashid, Hamad, Majid, Omar, Yousef, Abdullah, Khalid, Noura, Fatima, Maryam, Aisha, Latifa, Shamma
+   - Gulf surnames: Al-Kaabi, Al-Nuaimi, Al-Shamsi, Al-Dhaheri, Al-Mazrouei, Al-Falasi, Al-Muhairi, Al-Ketbi, Al-Suwaidi
+   - Indian: Arun, Vikram, Sandeep, Priya, Anjali, Meera, Ravi, Sunil + Kumar, Reddy, Nair, Verma, Singh, Sharma, Gupta
+   - Filipino: Jose, Marco, Anna, Maria, Miguel, Carlos, Elena + Santos, Dela Cruz, Torres, Reyes, Bautista, Garcia
+   - Western: James, Michael, Sarah, Emily, David, Robert, Jennifer + Williams, Brown, Martinez, Anderson, Taylor
+
+2. AGE: MUST be ${suggestedAge} years old (${ageRange.label})
+
+3. PERSONALITY TYPE: ${randomPersonality}
+
+4. SPEAKING STYLE: ${randomStyle}
+
+5. BIO/PRIORS - Write a UNIQUE biography that:
+   - Starts with a SPECIFIC personal experience or anecdote
+   - Does NOT start with "Champions", "Values", "Supports", "Believes"
+   - Mentions concrete details (job, family situation, specific event)
+   - Shows nuance and contradictions like a real person
+   - Is in FIRST PERSON ("I think...", "My experience...")
+
+BAD priors: "Champions economic diversification and traditional values."
+GOOD priors: "I lost my small shop to a mall chain in 2019. Now I drive Uber and see both sides - progress brings opportunities but crushes the little guy. My kids need jobs, but not at any cost."
+
+Generate JSON:
 {
-  "name": "First Last (UNIQUE - avoid Al-Mansouri, Al-Rashid, common names)",
-  "age": number between 18 and 80,
-  "socio_demo": "specific situation with personal details",
+  "name": "UNIQUE First Last - NOT from forbidden lists",
+  "age": ${suggestedAge},
+  "socio_demo": "specific job, family status, income, education",
   "traits": ["specific_trait1", "specific_trait2", "specific_trait3"],
-  "priors": "UNIQUE biography with personal story, specific experiences, nuanced views (100-180 chars). NO generic statements.",
-  "speaking_style": "specific style (e.g., 'uses sports metaphors', 'speaks in questions', 'dry humor')",
+  "priors": "UNIQUE first-person bio with personal story (100-180 chars)",
+  "speaking_style": "${randomStyle}",
   "expression_profile": {
-    "directness": number between 0 and 100,
-    "social_filter": number between 0 and 100,
-    "conformity_pressure": number between 0 and 100,
-    "context_sensitivity": "high" | "medium" | "low"
+    "directness": ${Math.floor(Math.random() * 60) + 20},
+    "social_filter": ${Math.floor(Math.random() * 60) + 20},
+    "conformity_pressure": ${Math.floor(Math.random() * 60) + 20},
+    "context_sensitivity": "${["high", "medium", "low"][Math.floor(Math.random() * 3)]}"
   },
   "psychological_profile": {
-    "core_values": ["specific_value1", "specific_value2"],
-    "cognitive_biases": ["specific_bias1", "specific_bias2"],
-    "risk_tolerance": number between 0 and 100,
-    "assertiveness": number between 0 and 100
+    "core_values": ["value1", "value2"],
+    "cognitive_biases": ["bias1", "bias2"],
+    "risk_tolerance": ${Math.floor(Math.random() * 60) + 20},
+    "assertiveness": ${Math.floor(Math.random() * 60) + 20}
   }
 }
 
-`;
+Reply ONLY with valid JSON.`;
 
   return prompt;
+}
+
+// Helper to track used names
+export function trackUsedName(firstName: string, lastName: string): void {
+  usedFirstNames.add(firstName);
+  usedLastNames.add(lastName);
+}
+
+export function getUsedNames(): { firstNames: string[]; lastNames: string[] } {
+  return {
+    firstNames: Array.from(usedFirstNames),
+    lastNames: Array.from(usedLastNames),
+  };
+}
+
+export function clearUsedNames(): void {
+  usedFirstNames.clear();
+  usedLastNames.clear();
 }
 
 export function formatReactionPrompt(
@@ -177,113 +226,72 @@ export function formatReactionPrompt(
     priors: string;
     traits: string[];
     speaking_style: string;
+    name?: string;
+    age?: number;
+    socio_demo?: string;
+    cluster_name?: string;
   },
   scenario: string,
   context?: string
 ): string {
-  return `You are a virtual agent in an opinion simulation.
+  // Add variance factor to encourage different stances
+  const varianceFactor = Math.floor(Math.random() * 15) - 7; // -7 to +7
+  
+  return `You are ${agentProfile.name || "a virtual agent"}, age ${agentProfile.age || "unknown"}.
 
-Agent profile:
-- Opinions and values: ${agentProfile.priors}
-- Personality traits: ${agentProfile.traits.join(", ")}
-- Communication style: ${agentProfile.speaking_style}
+YOUR UNIQUE PROFILE:
+- Personal beliefs: ${agentProfile.priors}
+- Personality: ${agentProfile.traits.join(", ")}
+- Speaking style: ${agentProfile.speaking_style}
+${agentProfile.socio_demo ? `- Situation: ${agentProfile.socio_demo}` : ""}
+${agentProfile.cluster_name ? `- Group: ${agentProfile.cluster_name}` : ""}
 
-Scenario: ${scenario}
-${context ? `\nAdditional context: ${context}` : ""}
+SCENARIO: ${scenario}
+${context ? `Context: ${context}` : ""}
 
-You MUST generate a valid JSON reaction. Follow these rules EXACTLY:
+CRITICAL: Generate YOUR UNIQUE stance score.
+- DO NOT use round numbers like 25, 50, 75!
+- Use SPECIFIC numbers like 23, 47, 63, 78, 81, etc.
+- Your personal variance: ${varianceFactor > 0 ? "+" : ""}${varianceFactor} (consider this to differentiate from others)
+- Consider how YOUR specific age (${agentProfile.age || "unknown"}) and situation affect your view
 
-CRITICAL EMOTION RULES:
-The "emotion" field MUST be EXACTLY one of these 9 words (no variations!):
-- anger (frustration, annoyance)
-- fear (worry, caution, anxiety)  
-- hope (optimism, confidence)
-- cynicism (skepticism, doubt)
-- pride (satisfaction, confidence)
-- sadness (disappointment, resignation)
-- indifference (neutrality, pragmatism)
-- enthusiasm (excitement, eagerness)
-- mistrust (suspicion, wariness)
+VALID EMOTIONS (MUST use exactly one):
+anger | fear | hope | cynicism | pride | sadness | indifference | enthusiasm | mistrust
 
-DO NOT use: "pragmatic", "cautious", "neutral", "mixed", "concerned", "optimistic", etc.
-Map your intended emotion to one of the 9 valid options above.
-
-REQUIRED JSON STRUCTURE:
+Generate JSON:
 {
-  "stance_score": <number 0-100>,
-  "confidence": <number 0-100>,
-  "emotion": "<MUST be exactly one of: anger, fear, hope, cynicism, pride, sadness, indifference, enthusiasm, mistrust>",
-  "key_reasons": ["<reason1>", "<reason2>", "<reason3>"],
-  "response": "<text 80-200 characters expressing the agent's view>",
+  "stance_score": <SPECIFIC number 0-100, NOT 25/50/75 - use 23, 47, 63, 78, etc.>,
+  "confidence": <0-100>,
+  "emotion": "<EXACTLY: anger|fear|hope|cynicism|pride|sadness|indifference|enthusiasm|mistrust>",
+  "key_reasons": ["YOUR reason 1", "YOUR reason 2", "YOUR reason 3"],
+  "response": "<YOUR verbal response 80-200 chars, in YOUR speaking style>",
   "true_belief": {
-    "inner_stance_score": <number 0-100>,
-    "cognitive_biases": ["<bias1>", "<bias2>"],
-    "core_values_impact": "<description>",
-    "self_awareness": <number 0-100>
+    "inner_stance_score": <0-100>,
+    "cognitive_biases": ["bias1", "bias2"],
+    "core_values_impact": "description",
+    "self_awareness": <0-100>
   },
   "public_expression": {
-    "expressed_stance_score": <number 0-100>,
-    "expression_modifier": <number -50 to 50>,
-    "filter_reasons": ["<reason1>", "<reason2>"],
-    "context": "<one of: public, semi_public, private, social_media, secret_ballot>"
+    "expressed_stance_score": <0-100>,
+    "expression_modifier": <-50 to 50>,
+    "filter_reasons": ["reason1", "reason2"],
+    "context": "<public|semi_public|private|social_media|secret_ballot>"
   },
   "behavioral_action": {
-    "action_type": "<one of: vote_for, vote_against, vote_blank, abstention, petition_for, petition_against, manifestation_for, manifestation_against, public_support_for, public_support_against, no_action>",
-    "action_intensity": <number 0-100>,
-    "action_consistency": "<one of: consistent, moderate_gap, major_gap>",
-    "predicted_engagement": "<one of: passive, moderate, active, militant>"
+    "action_type": "<vote_for|vote_against|vote_blank|abstention|petition_for|petition_against|manifestation_for|manifestation_against|public_support_for|public_support_against|no_action>",
+    "action_intensity": <0-100>,
+    "action_consistency": "<consistent|moderate_gap|major_gap>",
+    "predicted_engagement": "<passive|moderate|active|militant>"
   },
-  "coherence_score": <number 0-100>,
+  "coherence_score": <0-100>,
   "coherence_breakdown": {
-    "thought_expression_gap": <number 0-100>,
-    "thought_action_gap": <number 0-100>,
-    "expression_action_gap": <number 0-100>
+    "thought_expression_gap": <0-100>,
+    "thought_action_gap": <0-100>,
+    "expression_action_gap": <0-100>
   }
 }
 
-CRITICAL REQUIREMENTS:
-1. "response" MUST be between 80 and 160 characters EXACTLY. Count each character including spaces.
-2. "key_reasons" MUST be an array with exactly 3 non-empty strings.
-3. All enum values MUST match exactly (case-sensitive).
-4. All numbers MUST be valid integers/floats within specified ranges.
-5. "true_belief", "public_expression", and "behavioral_action" MUST be objects, NOT strings.
-6. Return ONLY the JSON object, no markdown code blocks, no explanations, no extra text.
-
-EXAMPLE (response is 95 characters):
-{
-  "stance_score": 75,
-  "confidence": 80,
-  "emotion": "hope",
-  "key_reasons": ["Economic benefits", "Cultural preservation", "Democratic values"],
-  "response": "I support this proposal because it aligns with our core values and will benefit our community significantly.",
-  "true_belief": {
-    "inner_stance_score": 75,
-    "cognitive_biases": ["confirmation_bias"],
-    "core_values_impact": "Strengthens democratic principles",
-    "self_awareness": 60
-  },
-  "public_expression": {
-    "expressed_stance_score": 70,
-    "expression_modifier": -5,
-    "filter_reasons": ["Economic benefits"],
-    "context": "public"
-  },
-  "behavioral_action": {
-    "action_type": "vote_for",
-    "action_intensity": 70,
-    "action_consistency": "consistent",
-    "predicted_engagement": "moderate"
-  },
-  "coherence_score": 75,
-  "coherence_breakdown": {
-    "thought_expression_gap": 5,
-    "thought_action_gap": 5,
-    "expression_action_gap": 0
-  }
-}
-
-Now generate the reaction for this agent.
-`;
+Reply ONLY with valid JSON. No markdown, no explanation.`;
 }
 
 export function formatExecutiveSummaryPrompt(

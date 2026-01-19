@@ -31,6 +31,10 @@ export async function generateReaction(
       priors: agent.priors,
       traits: agent.traits,
       speaking_style: agent.speaking_style,
+      name: agent.name,
+      age: agent.age,
+      socio_demo: agent.socio_demo,
+      cluster_name: agent.cluster_id, // Will be replaced with actual name if available
     },
     scenario,
     context

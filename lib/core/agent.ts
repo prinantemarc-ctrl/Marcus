@@ -1,8 +1,9 @@
 /**
  * Agent Generator - Generate agents via LLM
+ * Enhanced with name tracking and age variance for diversity
  */
 
-import { callLLM, formatAgentPrompt } from "./llm";
+import { callLLM, formatAgentPrompt, trackUsedName, getUsedNames, clearUsedNames } from "./llm";
 import type { LLMConfig } from "./config";
 import type { Agent } from "@/types";
 import { saveAgentsForCluster, getAgentsForCluster } from "./storage";
@@ -22,19 +23,26 @@ export async function generateAgent(
     age?: number;
     region?: string;
     socioClass?: string;
+    agentIndex?: number;
   },
   config: LLMConfig
 ): Promise<Agent> {
+  // Get currently used names to avoid duplicates
+  const usedNames = getUsedNames();
+  
   const prompt = formatAgentPrompt(clusterDescription, {
     age: demographics.age,
     region: demographics.region,
     socioClass: demographics.socioClass,
+    agentIndex: demographics.agentIndex || 0,
+    forbiddenFirstNames: usedNames.firstNames.slice(-10),
+    forbiddenLastNames: usedNames.lastNames.slice(-10),
   });
 
   const response = await callLLM(
     {
       prompt,
-      temperature: 0.8,
+      temperature: 0.9, // Higher temperature for more diversity
       maxTokens: 1500,
     },
     config
@@ -47,14 +55,34 @@ export async function generateAgent(
   // Parse JSON response
   let agentData: any;
   try {
-    // Try to extract JSON from response (might have markdown code blocks)
-    const jsonMatch = response.content.match(/```json\s*([\s\S]*?)\s*```/) ||
-                      response.content.match(/```\s*([\s\S]*?)\s*```/) ||
-                      response.content;
-    const jsonStr = typeof jsonMatch === "string" ? jsonMatch : jsonMatch[1];
-    agentData = JSON.parse(jsonStr.trim());
+    let jsonStr = response.content.trim();
+    
+    // Try to extract JSON from markdown code blocks
+    const jsonMatch = jsonStr.match(/```json\s*([\s\S]*?)\s*```/) ||
+                      jsonStr.match(/```\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      jsonStr = jsonMatch[1].trim();
+    }
+    
+    // Try to find JSON object in text
+    if (!jsonStr.startsWith('{')) {
+      const jsonObjMatch = jsonStr.match(/\{[\s\S]*\}/);
+      if (jsonObjMatch) {
+        jsonStr = jsonObjMatch[0];
+      }
+    }
+    
+    agentData = JSON.parse(jsonStr);
   } catch (error) {
     throw new Error(`Failed to parse LLM response: ${error instanceof Error ? error.message : "Unknown error"}`);
+  }
+
+  // Track used names to prevent duplicates
+  if (agentData.name) {
+    const nameParts = agentData.name.split(" ");
+    const firstName = nameParts[0];
+    const lastName = nameParts.slice(1).join(" ");
+    trackUsedName(firstName, lastName);
   }
 
   // Create agent with required fields
@@ -90,6 +118,9 @@ export async function generateAgent(
   return validated;
 }
 
+// Export function to clear name tracking (call before starting a new batch)
+export { clearUsedNames };
+
 export async function generateAgentsBatch(
   clusterId: string,
   clusterDescription: string,
@@ -107,6 +138,9 @@ export async function generateAgentsBatch(
 ): Promise<Agent[]> {
   onProgress?.("Preparing generation...", 0, count);
   await new Promise(resolve => setTimeout(resolve, 300));
+  
+  // Clear name tracking for fresh batch (optional - keeps names unique across batches)
+  // clearUsedNames();
   
   onProgress?.("Analyzing cluster characteristics...", 0, count);
   await new Promise(resolve => setTimeout(resolve, 400));
@@ -126,7 +160,10 @@ export async function generateAgentsBatch(
       const agent = await generateAgent(
         clusterId,
         clusterDescription,
-        demo,
+        {
+          ...demo,
+          agentIndex: i, // Pass index for age variance
+        },
         config
       );
       
@@ -136,7 +173,7 @@ export async function generateAgentsBatch(
       agents.push(agent);
       
       onProgress?.(
-        `Agent ${i + 1} created`,
+        `Agent ${i + 1} created: ${agent.name}`,
         i + 1,
         count,
         {
