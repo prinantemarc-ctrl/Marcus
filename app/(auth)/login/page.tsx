@@ -10,8 +10,9 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/";
   
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  // Pre-fill with admin credentials for dev mode
+  const [email, setEmail] = useState("admin@marcus.com");
+  const [password, setPassword] = useState("admin123");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 

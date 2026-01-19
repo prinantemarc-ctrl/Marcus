@@ -10,6 +10,7 @@ const STORAGE_KEYS = {
   clusters: "op_clusters",
   agents: "op_agents", // { [clusterId]: Agent[] }
   simulations: "op_simulations",
+  polls: "op_polls",
 } as const;
 
 // ============================================================================
@@ -190,6 +191,47 @@ export function getSimulation(id: string): Simulation | null {
 export function deleteSimulation(id: string): void {
   const simulations = getAllSimulations().filter(s => s.id !== id);
   safeSet(STORAGE_KEYS.simulations, simulations);
+}
+
+// ============================================================================
+// POLLS
+// ============================================================================
+export interface Poll {
+  id: string;
+  title: string;
+  question: string;
+  options: string[];
+  responseMode: "choice" | "ranking" | "scoring";
+  status: "pending" | "running" | "completed" | "failed";
+  zoneId: string;
+  results?: unknown[];
+  statistics?: unknown;
+  createdAt: string;
+}
+
+export function getAllPolls(): Poll[] {
+  return safeGet(STORAGE_KEYS.polls, []);
+}
+
+export function getPoll(id: string): Poll | null {
+  const polls = getAllPolls();
+  return polls.find(p => p.id === id) || null;
+}
+
+export function savePoll(poll: Poll): void {
+  const polls = getAllPolls();
+  const existingIndex = polls.findIndex(p => p.id === poll.id);
+  if (existingIndex >= 0) {
+    polls[existingIndex] = poll;
+  } else {
+    polls.push(poll);
+  }
+  safeSet(STORAGE_KEYS.polls, polls);
+}
+
+export function deletePoll(id: string): void {
+  const polls = getAllPolls().filter(p => p.id !== id);
+  safeSet(STORAGE_KEYS.polls, polls);
 }
 
 // ============================================================================
