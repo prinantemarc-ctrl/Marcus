@@ -10,6 +10,7 @@ import { createSimulation as createSimulationAPI, addSimulationResults, updateSi
 import { generateReactionsBatch } from "./reaction";
 import { callLLM, formatExecutiveSummaryPrompt } from "./llm";
 import type { LLMConfig } from "./config";
+import { updateAgentMemoriesBatch } from "./agentMemory";
 
 // ============================================================================
 // SIMULATION CREATION
@@ -182,6 +183,18 @@ export async function runSimulation(
       turns: [reaction], // For now, single turn
     };
   });
+
+  // Update agent memories with this simulation's reactions
+  onProgress?.("Updating agent memories...", 82, 100);
+  try {
+    // Extract topic from scenario (first sentence or first 100 chars)
+    const topic = scenario.split(/[.!?]/)[0].substring(0, 100);
+    updateAgentMemoriesBatch(panel, reactions, topic);
+    console.log(`[simulation] Updated memories for ${panel.length} agents`);
+  } catch (memoryError) {
+    console.warn("[simulation] Failed to update agent memories:", memoryError);
+    // Non-fatal error, continue with simulation
+  }
 
   onProgress?.("Generating executive summary...", 85, 100);
   await new Promise(resolve => setTimeout(resolve, 200));

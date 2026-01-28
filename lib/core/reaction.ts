@@ -6,6 +6,7 @@ import { callLLM, formatReactionPrompt, formatBatchReactionPrompt } from "./llm"
 import type { LLMConfig } from "./config";
 import type { ReactionTurn, Agent } from "@/types";
 import { ReactionTurnSchema } from "@/types";
+import { formatMemoryForPrompt } from "./agentMemory";
 
 // ============================================================================
 // REACTION GENERATION
@@ -26,6 +27,24 @@ export async function generateReaction(
     throw new Error("LLM config is required");
   }
 
+  // Get agent's memory context for consistency
+  const memoryContext = formatMemoryForPrompt(agent, scenario);
+  if (memoryContext) {
+    console.log(`[reaction] Including memory context for agent ${agent.id}`);
+  }
+
+  // Extract life events and core values for richer context
+  const lifeEvents = agent.lifeHistory?.lifeEvents?.map(e => ({
+    year: e.year,
+    event: e.event,
+    emotionalImpact: e.emotionalImpact,
+  }));
+  
+  const coreValues = agent.lifeHistory?.coreValues?.map(v => ({
+    value: v.value,
+    importance: v.importance,
+  }));
+
   const prompt = formatReactionPrompt(
     {
       priors: agent.priors,
@@ -34,7 +53,10 @@ export async function generateReaction(
       name: agent.name,
       age: agent.age,
       socio_demo: agent.socio_demo,
-      cluster_name: agent.cluster_id, // Will be replaced with actual name if available
+      cluster_name: agent.cluster_id,
+      memoryContext,
+      lifeEvents,
+      coreValues,
     },
     scenario,
     context

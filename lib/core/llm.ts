@@ -142,23 +142,32 @@ export function formatAgentPrompt(
   ];
   const randomStyle = speakingStyles[Math.floor(Math.random() * speakingStyles.length)];
 
+  // Determine region context for culturally appropriate names
+  const regionContext = demographics?.region || "International";
+  
   let prompt = `You are generating a UNIQUE virtual agent for an opinion simulation.
 
 Cluster: ${clusterDescription}
-${demographics?.region ? `Region: ${demographics.region}` : ""}
+Region/Country: ${regionContext}
 
-CRITICAL UNIQUENESS RULES:
+CRITICAL RULES:
 
-1. NAME MUST BE UNIQUE:
-   DO NOT use these first names: ${forbiddenFirst.join(", ") || "none specified"}
-   DO NOT use these last names: ${forbiddenLast.join(", ") || "none specified"}
+1. NAME MUST BE CULTURALLY APPROPRIATE:
+   - Generate a name that is AUTHENTIC and TYPICAL for someone from ${regionContext}
+   - Use real, common first names and last names from ${regionContext}
+   - DO NOT use generic Western names unless the region is Western
+   - DO NOT use these already-used names: ${[...forbiddenFirst, ...forbiddenLast].join(", ") || "none"}
    
-   NAME POOLS (choose creatively, MIX different origins):
-   - Emirati: Saif, Rashid, Hamad, Majid, Omar, Yousef, Abdullah, Khalid, Noura, Fatima, Maryam, Aisha, Latifa, Shamma
-   - Gulf surnames: Al-Kaabi, Al-Nuaimi, Al-Shamsi, Al-Dhaheri, Al-Mazrouei, Al-Falasi, Al-Muhairi, Al-Ketbi, Al-Suwaidi
-   - Indian: Arun, Vikram, Sandeep, Priya, Anjali, Meera, Ravi, Sunil + Kumar, Reddy, Nair, Verma, Singh, Sharma, Gupta
-   - Filipino: Jose, Marco, Anna, Maria, Miguel, Carlos, Elena + Santos, Dela Cruz, Torres, Reyes, Bautista, Garcia
-   - Western: James, Michael, Sarah, Emily, David, Robert, Jennifer + Williams, Brown, Martinez, Anderson, Taylor
+   Examples by region:
+   - Congo/Central Africa: Ngoma Makaya, Mbemba Loubaki, Itoua Nzaba, Elenga Mouanda
+   - West Africa: Kofi Mensah, Aminata Diallo, Ousmane Sy, Fatou Ndiaye
+   - North Africa: Karim Benali, Amina Zidane, Youssef Hamdi, Leila Bouzid
+   - Middle East/Gulf: Rashid Al-Kaabi, Fatima Al-Nuaimi, Omar Al-Mansouri
+   - South Asia: Arun Sharma, Priya Nair, Vikram Reddy, Anjali Gupta
+   - Southeast Asia: Jose Santos, Maria Dela Cruz, Nguyen Van Minh
+   - East Asia: Wei Chen, Yuki Tanaka, Min-jun Kim, Mei Lin
+   - Latin America: Carlos Rodriguez, Maria Gonzalez, Juan Martinez
+   - Europe: Pierre Dupont, Anna Müller, Marco Rossi, Elena Ivanova
 
 2. AGE: MUST be ${suggestedAge} years old (${ageRange.label})
 
@@ -252,14 +261,28 @@ export function formatBatchAgentPrompt(
     ages.push(Math.floor(Math.random() * (range.max - range.min + 1)) + range.min);
   }
 
+  const regionContext = options?.region || "International";
+  
   return `Generate ${count} UNIQUE agents for: "${clusterDescription}"
-${options?.region ? `Region: ${options.region}` : ""}
+Region/Country: ${regionContext}
 
-Requirements:
-- All ${count} names DIFFERENT (vary first AND last names)
+CRITICAL NAME RULES:
+- All names MUST be culturally appropriate for ${regionContext}
+- Use AUTHENTIC local names (first AND last) typical of ${regionContext}
+- DO NOT use generic Western names unless the region is Western
+- All ${count} names must be DIFFERENT
 - DO NOT use: ${forbidden}
+
+Examples of appropriate names by region:
+- Congo/Central Africa: Ngoma Makaya, Mbemba Loubaki, Itoua Nzaba
+- West Africa: Kofi Mensah, Aminata Diallo, Ousmane Sy
+- North Africa: Karim Benali, Amina Zidane, Youssef Hamdi
+- Middle East/Gulf: Rashid Al-Kaabi, Fatima Al-Nuaimi
+- South Asia: Arun Sharma, Priya Nair
+- Latin America: Carlos Rodriguez, Maria Gonzalez
+
+Other requirements:
 - Ages: ${ages.join(", ")}
-- Mix cultural backgrounds: Emirati, Indian, Filipino, Western
 - Each bio: first-person, personal experience, 80-120 chars
 - NO "Values", "Champions", "Believes" starts
 - Include DIVERSE perspectives (some pro-change, some conservative, some neutral)
@@ -373,6 +396,10 @@ export function formatReactionPrompt(
     age?: number;
     socio_demo?: string;
     cluster_name?: string;
+    // NEW: Memory for consistency
+    memoryContext?: string;
+    lifeEvents?: Array<{ year: number; event: string; emotionalImpact: number }>;
+    coreValues?: Array<{ value: string; importance: number }>;
   },
   scenario: string,
   context?: string
@@ -380,6 +407,27 @@ export function formatReactionPrompt(
   // Add variance factor to encourage different stances
   const varianceFactor = Math.floor(Math.random() * 15) - 7; // -7 to +7
   
+  // Format life events if available
+  let lifeEventsSection = "";
+  if (agentProfile.lifeEvents && agentProfile.lifeEvents.length > 0) {
+    const events = agentProfile.lifeEvents
+      .slice(-3) // Last 3 events
+      .map(e => `  - ${e.year}: ${e.event} (${e.emotionalImpact > 0 ? "positive" : "difficult"} experience)`)
+      .join("\n");
+    lifeEventsSection = `\nKEY LIFE EXPERIENCES:\n${events}`;
+  }
+
+  // Format core values if available
+  let valuesSection = "";
+  if (agentProfile.coreValues && agentProfile.coreValues.length > 0) {
+    const values = agentProfile.coreValues
+      .sort((a, b) => b.importance - a.importance)
+      .slice(0, 3)
+      .map(v => `${v.value} (${v.importance}/10)`)
+      .join(", ");
+    valuesSection = `\nCORE VALUES (in order): ${values}`;
+  }
+
   return `You are ${agentProfile.name || "a virtual agent"}, age ${agentProfile.age || "unknown"}.
 
 YOUR UNIQUE PROFILE:
@@ -387,7 +435,7 @@ YOUR UNIQUE PROFILE:
 - Personality: ${agentProfile.traits.join(", ")}
 - Speaking style: ${agentProfile.speaking_style}
 ${agentProfile.socio_demo ? `- Situation: ${agentProfile.socio_demo}` : ""}
-${agentProfile.cluster_name ? `- Group: ${agentProfile.cluster_name}` : ""}
+${agentProfile.cluster_name ? `- Group: ${agentProfile.cluster_name}` : ""}${lifeEventsSection}${valuesSection}${agentProfile.memoryContext || ""}
 
 SCENARIO: ${scenario}
 ${context ? `Context: ${context}` : ""}

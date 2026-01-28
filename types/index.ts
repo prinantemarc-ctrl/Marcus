@@ -58,11 +58,86 @@ export type Cluster = z.infer<typeof ClusterSchema>;
 // ============================================================================
 // AGENTS
 // ============================================================================
+
+// Life events that shape an agent's worldview
+export const LifeEventSchema = z.object({
+  year: z.number().int(),
+  event: z.string(),
+  category: z.enum(["family", "career", "health", "financial", "political", "social", "education"]),
+  emotionalImpact: z.number().min(-100).max(100), // -100 = traumatic, +100 = very positive
+});
+export type LifeEvent = z.infer<typeof LifeEventSchema>;
+
+// Core values with hierarchy
+export const CoreValueSchema = z.object({
+  value: z.enum([
+    "security", "freedom", "family", "success", "tradition", "justice",
+    "community", "independence", "loyalty", "faith", "equality", "prosperity"
+  ]),
+  importance: z.number().min(1).max(10),
+});
+export type CoreValue = z.infer<typeof CoreValueSchema>;
+
+// Financial situation
+export const FinancialProfileSchema = z.object({
+  incomeLevel: z.enum(["very_low", "low", "middle", "upper_middle", "high", "very_high"]),
+  hasDebt: z.boolean(),
+  ownsProperty: z.boolean(),
+  financialAnxiety: z.number().min(0).max(100),
+  dependents: z.number().int().min(0),
+});
+export type FinancialProfile = z.infer<typeof FinancialProfileSchema>;
+
+// Social influence profile
+export const SocialProfileSchema = z.object({
+  familyInfluence: z.number().min(0).max(100),
+  peerPressure: z.number().min(0).max(100),
+  trustInInstitutions: z.number().min(0).max(100),
+  trustInMedia: z.number().min(0).max(100),
+  communityInvolvement: z.enum(["none", "low", "medium", "high"]),
+});
+export type SocialProfile = z.infer<typeof SocialProfileSchema>;
+
+// Media consumption and information sources
+export const MediaProfileSchema = z.object({
+  primarySources: z.array(z.enum([
+    "social_media", "tv_news", "newspapers", "radio", "word_of_mouth",
+    "government_sources", "independent_media", "international_media"
+  ])),
+  politicalLeaning: z.number().min(-100).max(100), // -100 = left, +100 = right
+  skepticismLevel: z.number().min(0).max(100),
+});
+export type MediaProfile = z.infer<typeof MediaProfileSchema>;
+
+// Agent's memory of past interactions
+export const AgentMemoryEntrySchema = z.object({
+  date: z.string(),
+  topic: z.string(),
+  simulationId: z.string().optional(),
+  pollId: z.string().optional(),
+  stance: z.number().min(0).max(100),
+  emotion: z.string(),
+  keyArguments: z.array(z.string()),
+  response: z.string().optional(),
+});
+export type AgentMemoryEntry = z.infer<typeof AgentMemoryEntrySchema>;
+
+// Anchored beliefs (stable positions on topics)
+export const AnchoredBeliefSchema = z.object({
+  topic: z.string(),
+  stance: z.number().min(0).max(100),
+  confidence: z.number().min(0).max(100),
+  lastUpdated: z.string(),
+  timesExpressed: z.number().int().min(1),
+});
+export type AnchoredBelief = z.infer<typeof AnchoredBeliefSchema>;
+
 export const AgentSchema = z.object({
   id: z.string(),
   name: z.string().optional(),
   agentNumber: z.number().int().positive().optional(),
   age: z.number().int().min(0).max(150),
+  gender: z.enum(["male", "female", "other"]).optional(),
   ageBucketId: z.string(),
   regionId: z.string(),
   cspId: z.string(),
@@ -71,18 +146,48 @@ export const AgentSchema = z.object({
   traits: z.array(z.string()),
   priors: z.string(),
   speaking_style: z.string(),
+  
+  // Expression profile
   expression_profile: z.object({
     directness: z.number().min(0).max(100).default(50),
     social_filter: z.number().min(0).max(100).default(50),
     conformity_pressure: z.number().min(0).max(100).default(50),
     context_sensitivity: z.enum(["high", "medium", "low"]).default("medium"),
   }).optional(),
+  
+  // Basic psychological profile (legacy)
   psychological_profile: z.object({
     core_values: z.array(z.string()).optional(),
     cognitive_biases: z.array(z.string()).optional(),
     risk_tolerance: z.number().min(0).max(100).default(50),
     assertiveness: z.number().min(0).max(100).default(50),
   }).optional(),
+  
+  // NEW: Rich life history
+  lifeHistory: z.object({
+    lifeEvents: z.array(LifeEventSchema).optional(),
+    coreValues: z.array(CoreValueSchema).optional(),
+    formativeExperiences: z.array(z.string()).optional(),
+  }).optional(),
+  
+  // NEW: Financial situation
+  financialProfile: FinancialProfileSchema.optional(),
+  
+  // NEW: Social influence
+  socialProfile: SocialProfileSchema.optional(),
+  
+  // NEW: Media consumption
+  mediaProfile: MediaProfileSchema.optional(),
+  
+  // NEW: Memory of past interactions
+  memory: z.object({
+    interactions: z.array(AgentMemoryEntrySchema).optional(),
+    anchoredBeliefs: z.array(AnchoredBeliefSchema).optional(),
+  }).optional(),
+  
+  // Metadata
+  createdAt: z.string().optional(),
+  lastInteractionAt: z.string().optional(),
 });
 export type Agent = z.infer<typeof AgentSchema>;
 
