@@ -306,6 +306,64 @@ JSON array (no markdown):
 Legend: id=agent number, s=stance_score, c=confidence, e=emotion, r=key_reasons, t=response text`;
 }
 
+/**
+ * Batch Poll Response Generation Prompt
+ * Generates multiple poll responses in a single LLM call (~70% token savings)
+ */
+export function formatBatchPollPrompt(
+  agents: Array<{
+    id: string;
+    name?: string;
+    age?: number;
+    priors: string;
+    traits?: string[];
+  }>,
+  question: string,
+  options: Array<{ id: string; name: string; description?: string }>,
+  responseMode: "choice" | "ranking" | "scoring"
+): string {
+  const agentList = agents.map((a, i) => 
+    `${i+1}. ${a.name || `Agent ${i+1}`} (${a.age || "?"}): ${a.priors.substring(0, 80)}`
+  ).join("\n");
+
+  const optionsList = options
+    .map((opt, idx) => `${idx + 1}. ${opt.name}${opt.description ? ` - ${opt.description}` : ""}`)
+    .join("\n");
+
+  let modeInstructions = "";
+  let responseFormat = "";
+  
+  if (responseMode === "choice") {
+    modeInstructions = "Choose ONE option number for each agent.";
+    responseFormat = `"r": <option number 1-${options.length}>`;
+  } else if (responseMode === "ranking") {
+    modeInstructions = `Rank ALL ${options.length} options from best to worst for each agent.`;
+    responseFormat = `"r": [${options.map((_, i) => i + 1).join(",")}] (ordered by preference)`;
+  } else {
+    modeInstructions = "Score EACH option 0-100 for each agent.";
+    responseFormat = `"r": {${options.map((o, i) => `"${i+1}":N`).join(",")}} (scores 0-100)`;
+  }
+
+  return `Poll Question: "${question}"
+
+Options:
+${optionsList}
+
+Agents:
+${agentList}
+
+${modeInstructions}
+
+CRITICAL: Each agent responds based on their UNIQUE profile and beliefs.
+- Responses should VARY based on each agent's background
+- Confidence should reflect how strongly they feel (0-100)
+
+JSON array (no markdown):
+[{"id":1,${responseFormat},"why":"brief reason 30-60 chars","c":0-100}]
+
+Legend: id=agent number, r=response, why=reasoning, c=confidence`;
+}
+
 export function formatReactionPrompt(
   agentProfile: {
     priors: string;

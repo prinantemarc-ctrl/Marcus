@@ -7,7 +7,7 @@ import { getZones, getZone } from "./storage";
 import { getClusters, getClustersByZone } from "./storage";
 import { getAllAgents, getAgentsForCluster } from "./storage";
 import { createPoll as createPollAPI, addPollResponses, updatePollAPI } from "./api";
-import { callLLM } from "./llm";
+import { callLLM, formatBatchPollPrompt } from "./llm";
 import type { LLMConfig } from "./config";
 import { PollResultSchema, PollResponseSchema } from "@/types";
 
@@ -165,6 +165,128 @@ async function generatePollResponse(
   };
 
   return PollResponseSchema.parse(pollResponse);
+}
+
+// ============================================================================
+// BATCH POLL GENERATION (Token-optimized)
+// ============================================================================
+const POLL_BATCH_SIZE = 5; // Generate 5 poll responses per LLM call (~70% token savings)
+
+/**
+ * Parse batch poll response from LLM (compact format)
+ */
+function parseBatchPollResponse(content: string): any[] {
+  let cleaned = content.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  
+  const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+  if (arrayMatch) {
+    return JSON.parse(arrayMatch[0]);
+  }
+  
+  throw new Error("Could not parse batch poll response as JSON array");
+}
+
+/**
+ * Expand compact poll response to full format
+ */
+function expandPollResponse(
+  compact: any,
+  agent: Agent,
+  config: PollConfig
+): PollResponse {
+  let normalizedResponse: string | string[] | Record<string, number>;
+  
+  if (config.responseMode === "choice") {
+    // Convert number to option ID
+    const optionIndex = (typeof compact.r === 'number' ? compact.r : parseInt(compact.r)) - 1;
+    normalizedResponse = config.options[optionIndex]?.id || config.options[0].id;
+  } else if (config.responseMode === "ranking") {
+    // Convert numbers array to option IDs
+    const ranking = Array.isArray(compact.r) ? compact.r : [compact.r];
+    normalizedResponse = ranking
+      .map((num: number | string) => {
+        const idx = (typeof num === 'number' ? num : parseInt(String(num))) - 1;
+        return config.options[idx]?.id;
+      })
+      .filter((id: string | undefined): id is string => !!id);
+    
+    // Ensure all options are included
+    const includedIds = new Set(normalizedResponse);
+    config.options.forEach(opt => {
+      if (!includedIds.has(opt.id)) {
+        (normalizedResponse as string[]).push(opt.id);
+      }
+    });
+  } else {
+    // Scoring mode - convert compact format to option IDs
+    const scoringResponse: Record<string, number> = {};
+    config.options.forEach((opt, idx) => {
+      const score = compact.r?.[String(idx + 1)] || compact.r?.[opt.name] || 50;
+      scoringResponse[opt.id] = Math.max(0, Math.min(100, Number(score)));
+    });
+    normalizedResponse = scoringResponse;
+  }
+
+  return {
+    agentId: agent.id,
+    clusterId: agent.cluster_id,
+    response: normalizedResponse,
+    reasoning: compact.why || "",
+    confidence: Math.max(0, Math.min(100, compact.c || 50)),
+  };
+}
+
+/**
+ * Generate multiple poll responses in a single LLM call (optimized)
+ */
+async function generatePollResponsesBatchOptimized(
+  agents: Agent[],
+  config: PollConfig,
+  llmConfig: LLMConfig
+): Promise<PollResponse[]> {
+  const prompt = formatBatchPollPrompt(
+    agents.map(a => ({
+      id: a.id,
+      name: a.name,
+      age: a.age,
+      priors: a.priors,
+      traits: a.traits,
+    })),
+    config.question,
+    config.options,
+    config.responseMode
+  );
+
+  const response = await callLLM(
+    {
+      prompt,
+      temperature: 0.7,
+      maxTokens: 1500,
+    },
+    llmConfig
+  );
+
+  if (response.error) {
+    throw new Error(`LLM error: ${response.error}`);
+  }
+
+  const responsesData = parseBatchPollResponse(response.content);
+  const pollResponses: PollResponse[] = [];
+  
+  for (let i = 0; i < responsesData.length && i < agents.length; i++) {
+    const compact = responsesData[i];
+    const agent = agents[i];
+    
+    try {
+      const pollResponse = expandPollResponse(compact, agent, config);
+      const validated = PollResponseSchema.parse(pollResponse);
+      pollResponses.push(validated);
+    } catch (error) {
+      console.error(`Error expanding poll response for agent ${agent.id}:`, error);
+    }
+  }
+
+  return pollResponses;
 }
 
 // ============================================================================
@@ -385,34 +507,96 @@ export async function runPoll(
     throw new Error(`No agents found in zone ${config.zoneId}`);
   }
 
-  onProgress?.("Generating poll responses...", 20, allAgents.length);
+  // Calculate number of batches needed
+  const numBatches = Math.ceil(allAgents.length / POLL_BATCH_SIZE);
+  
+  onProgress?.(`Generating poll responses (${numBatches} batch${numBatches > 1 ? 'es' : ''})...`, 20, allAgents.length);
   await new Promise(resolve => setTimeout(resolve, 300));
 
-  // Generate responses
+  // Generate responses in batches
   const responses: PollResponse[] = [];
-  for (let i = 0; i < allAgents.length; i++) {
-    const agent = allAgents[i];
+  
+  for (let batch = 0; batch < numBatches; batch++) {
+    const batchStart = batch * POLL_BATCH_SIZE;
+    const batchEnd = Math.min(batchStart + POLL_BATCH_SIZE, allAgents.length);
+    const batchAgents = allAgents.slice(batchStart, batchEnd);
     
-    try {
-      const response = await generatePollResponse(agent, config, llmConfig);
-      responses.push(response);
-
-      onProgress?.(
-        `Generating response ${i + 1}/${allAgents.length}...`,
-        i + 1,
-        allAgents.length,
-        {
-          agentName: agent.name || `Agent ${agent.agentNumber}`,
-          response: response.reasoning?.substring(0, 50) || "Response generated"
+    console.log(`[poll] Batch ${batch + 1}/${numBatches}: Processing ${batchAgents.length} agents`);
+    
+    let retries = 2;
+    let batchSuccess = false;
+    
+    while (retries > 0 && !batchSuccess) {
+      try {
+        // Try batch generation first (optimized)
+        const batchResponses = await generatePollResponsesBatchOptimized(
+          batchAgents,
+          config,
+          llmConfig
+        );
+        
+        // Add batch responses to results
+        for (let i = 0; i < batchResponses.length; i++) {
+          const response = batchResponses[i];
+          const agent = batchAgents[i];
+          responses.push(response);
+          
+          onProgress?.(
+            `Generated response ${responses.length}/${allAgents.length}...`,
+            responses.length,
+            allAgents.length,
+            {
+              agentName: agent.name || `Agent ${agent.agentNumber}`,
+              response: response.reasoning?.substring(0, 50) || "Response generated"
+            }
+          );
         }
-      );
-
-      await new Promise(resolve => setTimeout(resolve, 100));
-    } catch (error) {
-      console.error(`Error generating response for agent ${agent.id}:`, error);
-      // Continue with next agent
+        
+        batchSuccess = true;
+        console.log(`[poll] Batch ${batch + 1} completed: ${batchResponses.length} responses generated`);
+        
+      } catch (batchError) {
+        retries--;
+        console.error(`[poll] Batch ${batch + 1} failed (${2 - retries}/2 attempts):`, batchError);
+        
+        if (retries === 0) {
+          // Fallback to individual generation for this batch
+          console.log(`[poll] Falling back to individual generation for batch ${batch + 1}`);
+          
+          for (let i = 0; i < batchAgents.length; i++) {
+            const agent = batchAgents[i];
+            
+            try {
+              const response = await generatePollResponse(agent, config, llmConfig);
+              responses.push(response);
+              
+              onProgress?.(
+                `Generated response ${responses.length}/${allAgents.length}...`,
+                responses.length,
+                allAgents.length,
+                {
+                  agentName: agent.name || `Agent ${agent.agentNumber}`,
+                  response: response.reasoning?.substring(0, 50) || "Response generated"
+                }
+              );
+            } catch (error) {
+              console.error(`Error generating response for agent ${agent.id}:`, error);
+            }
+          }
+        } else {
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+    }
+    
+    // Small delay between batches
+    if (batch < numBatches - 1) {
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
   }
+  
+  console.log(`[poll] Total responses generated: ${responses.length}/${allAgents.length}`)
 
   onProgress?.("Calculating statistics...", 90, 100);
   await new Promise(resolve => setTimeout(resolve, 300));
