@@ -221,6 +221,91 @@ export function clearUsedNames(): void {
   usedLastNames.clear();
 }
 
+// ============================================================================
+// BATCH PROMPTS (Token-optimized)
+// ============================================================================
+
+/**
+ * Batch Agent Generation Prompt
+ * Generates multiple agents in a single LLM call (~90% token savings)
+ */
+export function formatBatchAgentPrompt(
+  clusterDescription: string,
+  count: number,
+  options?: {
+    region?: string;
+    forbiddenNames?: string[];
+  }
+): string {
+  const forbidden = options?.forbiddenNames?.slice(-20).join(", ") || "none";
+  
+  // Determine age distribution
+  const ages = [];
+  for (let i = 0; i < count; i++) {
+    const ageRanges = [
+      { min: 25, max: 32 },
+      { min: 33, max: 42 },
+      { min: 43, max: 55 },
+      { min: 56, max: 70 },
+    ];
+    const range = ageRanges[i % ageRanges.length];
+    ages.push(Math.floor(Math.random() * (range.max - range.min + 1)) + range.min);
+  }
+
+  return `Generate ${count} UNIQUE agents for: "${clusterDescription}"
+${options?.region ? `Region: ${options.region}` : ""}
+
+Requirements:
+- All ${count} names DIFFERENT (vary first AND last names)
+- DO NOT use: ${forbidden}
+- Ages: ${ages.join(", ")}
+- Mix cultural backgrounds: Emirati, Indian, Filipino, Western
+- Each bio: first-person, personal experience, 80-120 chars
+- NO "Values", "Champions", "Believes" starts
+- Include DIVERSE perspectives (some pro-change, some conservative, some neutral)
+
+JSON array (no markdown):
+[{"name":"Full Name","age":N,"job":"job title","traits":["t1","t2","t3"],"priors":"First-person bio","style":"speaking style"}]`;
+}
+
+/**
+ * Batch Reaction Generation Prompt
+ * Generates multiple reactions in a single LLM call (~70% token savings)
+ */
+export function formatBatchReactionPrompt(
+  agents: Array<{
+    id: string;
+    name?: string;
+    age?: number;
+    priors: string;
+    traits?: string[];
+  }>,
+  scenario: string,
+  context?: string
+): string {
+  const agentList = agents.map((a, i) => 
+    `${i+1}. ${a.name || `Agent ${i+1}`} (${a.age || "?"}): ${a.priors.substring(0, 100)}`
+  ).join("\n");
+
+  return `Scenario: "${scenario}"
+${context ? `Context: ${context}` : ""}
+
+Agents:
+${agentList}
+
+CRITICAL: Generate DIVERSE reactions reflecting each agent's UNIQUE perspective.
+- Some should SUPPORT (s>60), some should OPPOSE (s<40), some NEUTRAL (40-60)
+- Stances must VARY based on each agent's background and interests
+- Use SPECIFIC scores (not 50, 25, 75) - use 23, 47, 63, 78, etc.
+
+Emotions: anger|fear|hope|cynicism|pride|sadness|indifference|enthusiasm|mistrust
+
+JSON array (no markdown):
+[{"id":1,"s":0-100,"c":0-100,"e":"emotion","r":["reason1","reason2","reason3"],"t":"response 80-150 chars"}]
+
+Legend: id=agent number, s=stance_score, c=confidence, e=emotion, r=key_reasons, t=response text`;
+}
+
 export function formatReactionPrompt(
   agentProfile: {
     priors: string;

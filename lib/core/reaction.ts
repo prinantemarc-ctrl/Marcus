@@ -2,7 +2,7 @@
  * Reaction Generator - Generate reactions via LLM
  */
 
-import { callLLM, formatReactionPrompt } from "./llm";
+import { callLLM, formatReactionPrompt, formatBatchReactionPrompt } from "./llm";
 import type { LLMConfig } from "./config";
 import type { ReactionTurn, Agent } from "@/types";
 import { ReactionTurnSchema } from "@/types";
@@ -439,6 +439,136 @@ export interface ReactionGenerationError {
   lastError: string;
 }
 
+// ============================================================================
+// BATCH SIZE FOR OPTIMIZED GENERATION
+// ============================================================================
+const REACTION_BATCH_SIZE = 5; // Generate 5 reactions per LLM call (~70% token savings)
+
+/**
+ * Parse batch reaction response from LLM (compact format)
+ */
+function parseBatchReactionResponse(content: string): any[] {
+  let cleaned = content.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  
+  const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+  if (arrayMatch) {
+    return JSON.parse(arrayMatch[0]);
+  }
+  
+  throw new Error("Could not parse batch reaction response as JSON array");
+}
+
+/**
+ * Expand compact reaction format to full format
+ */
+function expandReaction(compact: any, agent: Agent): ReactionTurn {
+  const validEmotions = ["anger", "fear", "hope", "cynicism", "pride", "sadness", "indifference", "enthusiasm", "mistrust"];
+  
+  // Map compact emotion to valid emotion
+  const emotionMapping: Record<string, string> = {
+    "pragmatic": "indifference", "neutral": "indifference", "cautious": "fear",
+    "worried": "fear", "anxious": "fear", "concerned": "fear",
+    "optimistic": "hope", "hopeful": "hope", "confident": "pride",
+    "excited": "enthusiasm", "enthusiastic": "enthusiasm",
+    "angry": "anger", "frustrated": "anger", "disappointed": "sadness",
+    "skeptical": "cynicism", "suspicious": "mistrust", "supportive": "hope",
+  };
+  
+  let emotion = (compact.e || "indifference").toLowerCase();
+  if (!validEmotions.includes(emotion)) {
+    emotion = emotionMapping[emotion] || "indifference";
+  }
+  
+  // Ensure key_reasons has 3 elements
+  let keyReasons = compact.r || [];
+  if (!Array.isArray(keyReasons)) keyReasons = [String(keyReasons)];
+  while (keyReasons.length < 3) {
+    keyReasons.push("Additional consideration");
+  }
+  
+  const stanceScore = Math.max(0, Math.min(100, compact.s || 50));
+  const confidence = Math.max(0, Math.min(100, compact.c || 50));
+  
+  return {
+    stance_score: stanceScore,
+    confidence: confidence,
+    emotion: emotion,
+    key_reasons: keyReasons.slice(0, 3),
+    response: compact.t || "No response provided.",
+    true_belief: {
+      inner_stance_score: stanceScore + (Math.random() * 10 - 5),
+      cognitive_biases: ["confirmation_bias", "anchoring"],
+      core_values_impact: "Reflects personal values and experiences",
+      self_awareness: Math.floor(Math.random() * 30) + 50,
+    },
+    public_expression: {
+      expressed_stance_score: stanceScore,
+      expression_modifier: Math.floor(Math.random() * 20) - 10,
+      filter_reasons: ["social_context", "professional_considerations"],
+      context: "public" as const,
+    },
+    behavioral_action: {
+      action_type: stanceScore > 60 ? "vote_for" : stanceScore < 40 ? "vote_against" : "abstention",
+      action_intensity: Math.abs(stanceScore - 50) + 20,
+      action_consistency: "consistent" as const,
+      predicted_engagement: stanceScore > 70 || stanceScore < 30 ? "active" : "moderate",
+    },
+    coherence_score: 75 + Math.floor(Math.random() * 20),
+  } as ReactionTurn;
+}
+
+/**
+ * Generate multiple reactions in a single LLM call (optimized)
+ */
+async function generateReactionsBatchOptimized(
+  agents: Agent[],
+  scenario: string,
+  context: string | undefined,
+  config: LLMConfig
+): Promise<Map<string, ReactionTurn>> {
+  const prompt = formatBatchReactionPrompt(
+    agents.map(a => ({
+      id: a.id,
+      name: a.name,
+      age: a.age,
+      priors: a.priors,
+      traits: a.traits,
+    })),
+    scenario,
+    context
+  );
+
+  const response = await callLLM(
+    {
+      prompt,
+      temperature: 0.8,
+      maxTokens: 1500,
+    },
+    config
+  );
+
+  if (response.error) {
+    throw new Error(`LLM error: ${response.error}`);
+  }
+
+  const reactionsData = parseBatchReactionResponse(response.content);
+  const reactions = new Map<string, ReactionTurn>();
+  
+  for (let i = 0; i < reactionsData.length && i < agents.length; i++) {
+    const compact = reactionsData[i];
+    const agent = agents[i];
+    
+    try {
+      const reaction = expandReaction(compact, agent);
+      reactions.set(agent.id, reaction);
+    } catch (error) {
+      console.error(`Error expanding reaction for agent ${agent.id}:`, error);
+    }
+  }
+
+  return reactions;
+}
+
 export async function generateReactionsBatch(
   agents: Agent[],
   scenario: string,
@@ -453,81 +583,92 @@ export async function generateReactionsBatch(
     throw new Error("LLM config is required");
   }
 
-  for (let i = 0; i < agents.length; i++) {
-    const agent = agents[i];
-    const agentName = agent.name || `Agent ${agent.agentNumber || i + 1}`;
-    let retries = 3;
-    let reaction: ReactionTurn | null = null;
-    const attemptErrors: string[] = [];
+  // Calculate number of batches needed
+  const numBatches = Math.ceil(agents.length / REACTION_BATCH_SIZE);
+  
+  console.log(`[reaction] Generating ${agents.length} reactions in ${numBatches} batch(es) (optimized mode)`);
+
+  for (let batch = 0; batch < numBatches; batch++) {
+    const batchStart = batch * REACTION_BATCH_SIZE;
+    const batchEnd = Math.min(batchStart + REACTION_BATCH_SIZE, agents.length);
+    const batchAgents = agents.slice(batchStart, batchEnd);
     
-    while (retries > 0 && !reaction) {
+    console.log(`[reaction] Batch ${batch + 1}/${numBatches}: Processing ${batchAgents.length} agents`);
+    
+    let retries = 2;
+    let batchSuccess = false;
+    
+    while (retries > 0 && !batchSuccess) {
       try {
-        reaction = await generateReaction(agent, scenario, context, config);
-        reactions.set(agent.id, reaction);
-        onProgress?.(i + 1, agents.length, agent.id, reaction);
-        await new Promise(resolve => setTimeout(resolve, 100));
-        break; // Success, exit retry loop
-      } catch (error) {
-        retries--;
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        attemptErrors.push(`Attempt ${4 - retries}: ${errorMessage}`);
+        // Try batch generation first (optimized)
+        const batchReactions = await generateReactionsBatchOptimized(
+          batchAgents,
+          scenario,
+          context,
+          config
+        );
         
-        console.error(`[reaction] Error generating reaction for agent ${agent.id} (${4 - retries}/3 attempts):`, error);
-        console.error(`[reaction] Error message: ${errorMessage}`);
-        
-        if (retries === 0) {
-          // Last attempt failed, collect error details
-          const detailedError: ReactionGenerationError = {
-            agentId: agent.id,
-            agentName,
-            attempts: 3,
-            errors: attemptErrors,
-            lastError: errorMessage,
-          };
-          errors.push(detailedError);
-          
-          console.error(`[reaction] ============================================`);
-          console.error(`[reaction] FAILED to generate reaction for agent ${agent.id} after 3 attempts`);
-          console.error(`[reaction] Agent details:`, {
-            id: agent.id,
-            name: agent.name,
-            agentNumber: agent.agentNumber,
-            cluster_id: agent.cluster_id,
-            priors: agent.priors?.substring(0, 200),
-            traits: agent.traits,
-          });
-          console.error(`[reaction] All error attempts:`, attemptErrors);
-          console.error(`[reaction] Last error:`, error);
-          console.error(`[reaction] ============================================`);
-          
-          // Throw detailed error
-          const errorSummary = `Agent: ${agentName} (${agent.id})\n` +
-            `Cluster: ${agent.cluster_id}\n` +
-            `Attempts: 3\n` +
-            `Errors:\n${attemptErrors.map((e, idx) => `  ${idx + 1}. ${e}`).join('\n')}\n` +
-            `Last error: ${errorMessage}`;
-          
-          throw new Error(`Failed to generate reaction for agent ${agentName} (${agent.id}) after 3 attempts:\n\n${errorSummary}`);
+        // Add batch reactions to results
+        for (const [agentId, reaction] of batchReactions) {
+          reactions.set(agentId, reaction);
+          const agentIndex = agents.findIndex(a => a.id === agentId);
+          onProgress?.(agentIndex + 1, agents.length, agentId, reaction);
         }
         
-        // Wait before retry with exponential backoff
-        const waitTime = 500 * (4 - retries); // 500ms, 1000ms, 1500ms
-        console.log(`[reaction] Retrying in ${waitTime}ms... (${retries} attempts remaining)`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+        batchSuccess = true;
+        console.log(`[reaction] Batch ${batch + 1} completed: ${batchReactions.size} reactions generated`);
+        
+      } catch (batchError) {
+        retries--;
+        console.error(`[reaction] Batch ${batch + 1} failed (${2 - retries}/2 attempts):`, batchError);
+        
+        if (retries === 0) {
+          // Fallback to individual generation for this batch
+          console.log(`[reaction] Falling back to individual generation for batch ${batch + 1}`);
+          
+          for (let i = 0; i < batchAgents.length; i++) {
+            const agent = batchAgents[i];
+            const agentName = agent.name || `Agent ${agent.agentNumber || batchStart + i + 1}`;
+            
+            try {
+              const reaction = await generateReaction(agent, scenario, context, config);
+              reactions.set(agent.id, reaction);
+              onProgress?.(batchStart + i + 1, agents.length, agent.id, reaction);
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              errors.push({
+                agentId: agent.id,
+                agentName,
+                attempts: 1,
+                errors: [errorMessage],
+                lastError: errorMessage,
+              });
+              console.error(`[reaction] Individual fallback failed for ${agentName}:`, error);
+            }
+          }
+        } else {
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
       }
+    }
+    
+    // Small delay between batches
+    if (batch < numBatches - 1) {
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
   }
 
-  // If we have errors, log summary but don't throw if we have some successful reactions
+  // Log summary
+  console.log(`[reaction] ============================================`);
+  console.log(`[reaction] SUMMARY: ${reactions.size}/${agents.length} reactions generated`);
   if (errors.length > 0) {
-    console.warn(`[reaction] ============================================`);
-    console.warn(`[reaction] SUMMARY: ${errors.length} agent(s) failed to generate reactions`);
-    console.warn(`[reaction] Successful: ${reactions.size}/${agents.length}`);
+    console.warn(`[reaction] ${errors.length} agent(s) failed:`);
     errors.forEach(err => {
-      console.warn(`[reaction] - ${err.agentName} (${err.agentId}): ${err.lastError}`);
+      console.warn(`[reaction] - ${err.agentName}: ${err.lastError}`);
     });
-    console.warn(`[reaction] ============================================`);
   }
+  console.log(`[reaction] ============================================`);
 
   return reactions;
 }

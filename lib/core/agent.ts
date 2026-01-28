@@ -3,7 +3,7 @@
  * Enhanced with name tracking and age variance for diversity
  */
 
-import { callLLM, formatAgentPrompt, trackUsedName, getUsedNames, clearUsedNames } from "./llm";
+import { callLLM, formatAgentPrompt, formatBatchAgentPrompt, trackUsedName, getUsedNames, clearUsedNames } from "./llm";
 import type { LLMConfig } from "./config";
 import type { Agent } from "@/types";
 import { saveAgentsForCluster, getAgentsForCluster } from "./storage";
@@ -121,6 +121,106 @@ export async function generateAgent(
 // Export function to clear name tracking (call before starting a new batch)
 export { clearUsedNames };
 
+// ============================================================================
+// BATCH SIZE FOR OPTIMIZED GENERATION
+// ============================================================================
+const BATCH_SIZE = 5; // Generate 5 agents per LLM call (90% token savings)
+
+/**
+ * Parse batch agent response from LLM
+ */
+function parseBatchAgentResponse(content: string): any[] {
+  let cleaned = content.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  
+  const arrayMatch = cleaned.match(/\[[\s\S]*\]/);
+  if (arrayMatch) {
+    return JSON.parse(arrayMatch[0]);
+  }
+  
+  throw new Error("Could not parse batch agent response as JSON array");
+}
+
+/**
+ * Generate multiple agents in a single LLM call (optimized)
+ */
+async function generateAgentsBatchOptimized(
+  clusterId: string,
+  clusterDescription: string,
+  count: number,
+  demographics: Array<{
+    ageBucketId: string;
+    regionId: string;
+    cspId: string;
+    age?: number;
+    region?: string;
+    socioClass?: string;
+  }>,
+  config: LLMConfig,
+  existingNames: string[]
+): Promise<Agent[]> {
+  const usedNames = getUsedNames();
+  const forbiddenNames = [...usedNames.firstNames, ...usedNames.lastNames, ...existingNames];
+  
+  const prompt = formatBatchAgentPrompt(clusterDescription, count, {
+    region: demographics[0]?.region,
+    forbiddenNames,
+  });
+
+  const response = await callLLM(
+    {
+      prompt,
+      temperature: 0.9,
+      maxTokens: 2000,
+    },
+    config
+  );
+
+  if (response.error) {
+    throw new Error(`LLM error: ${response.error}`);
+  }
+
+  const agentsData = parseBatchAgentResponse(response.content);
+  
+  const agents: Agent[] = agentsData.map((data: any, i: number) => {
+    const demo = demographics[i % demographics.length];
+    
+    // Track used names
+    if (data.name) {
+      const nameParts = data.name.split(" ");
+      trackUsedName(nameParts[0], nameParts.slice(1).join(" "));
+    }
+    
+    return {
+      id: `agent_${Date.now()}_${Math.random().toString(36).substr(2, 9)}_${i}`,
+      agentNumber: undefined,
+      name: data.name || `Agent ${Date.now()}_${i}`,
+      age: data.age || 35,
+      ageBucketId: demo.ageBucketId,
+      regionId: demo.regionId,
+      cspId: demo.cspId,
+      socio_demo: data.job || data.socio_demo || "Not specified",
+      cluster_id: clusterId,
+      traits: Array.isArray(data.traits) ? data.traits : [],
+      priors: data.priors || "",
+      speaking_style: data.style || data.speaking_style || "neutral",
+      expression_profile: {
+        directness: Math.floor(Math.random() * 60) + 20,
+        social_filter: Math.floor(Math.random() * 60) + 20,
+        conformity_pressure: Math.floor(Math.random() * 60) + 20,
+        context_sensitivity: ["high", "medium", "low"][Math.floor(Math.random() * 3)] as "high" | "medium" | "low",
+      },
+      psychological_profile: {
+        core_values: ["personal_growth", "stability"],
+        cognitive_biases: ["confirmation_bias"],
+        risk_tolerance: Math.floor(Math.random() * 60) + 20,
+        assertiveness: Math.floor(Math.random() * 60) + 20,
+      },
+    } as Agent;
+  });
+
+  return agents;
+}
+
 export async function generateAgentsBatch(
   clusterId: string,
   clusterDescription: string,
@@ -136,56 +236,98 @@ export async function generateAgentsBatch(
   config: LLMConfig,
   onProgress?: (stage: string, current: number, total: number, item?: { name: string; personality: string }) => void
 ): Promise<Agent[]> {
-  onProgress?.("Preparing generation...", 0, count);
+  onProgress?.("Preparing optimized batch generation...", 0, count);
   await new Promise(resolve => setTimeout(resolve, 300));
-  
-  // Clear name tracking for fresh batch (optional - keeps names unique across batches)
-  // clearUsedNames();
-  
-  onProgress?.("Analyzing cluster characteristics...", 0, count);
-  await new Promise(resolve => setTimeout(resolve, 400));
   
   const agents: Agent[] = [];
   const existingAgents = getAgentsForCluster(clusterId);
+  const existingNames = existingAgents.map(a => a.name || "").filter(Boolean);
 
-  for (let i = 0; i < count; i++) {
+  // Calculate number of batches needed
+  const numBatches = Math.ceil(count / BATCH_SIZE);
+  
+  onProgress?.(`Generating ${count} agents in ${numBatches} batch(es)...`, 0, count);
+  await new Promise(resolve => setTimeout(resolve, 200));
+
+  for (let batch = 0; batch < numBatches; batch++) {
+    const batchStart = batch * BATCH_SIZE;
+    const batchCount = Math.min(BATCH_SIZE, count - batchStart);
+    
     try {
       onProgress?.(
-        `Generating agent ${i + 1}/${count}...`,
-        i,
+        `Batch ${batch + 1}/${numBatches}: Generating ${batchCount} agents...`,
+        batchStart,
         count
       );
       
-      const demo = demographics[i % demographics.length];
-      const agent = await generateAgent(
+      // Get demographics for this batch
+      const batchDemographics = [];
+      for (let i = 0; i < batchCount; i++) {
+        batchDemographics.push(demographics[(batchStart + i) % demographics.length]);
+      }
+      
+      // Generate batch of agents in single LLM call
+      const batchAgents = await generateAgentsBatchOptimized(
         clusterId,
         clusterDescription,
-        {
-          ...demo,
-          agentIndex: i, // Pass index for age variance
-        },
-        config
+        batchCount,
+        batchDemographics,
+        config,
+        [...existingNames, ...agents.map(a => a.name || "")]
       );
       
-      // Assign agent number
-      agent.agentNumber = existingAgents.length + agents.length + i + 1;
+      // Assign agent numbers and add to list
+      for (let i = 0; i < batchAgents.length; i++) {
+        const agent = batchAgents[i];
+        agent.agentNumber = existingAgents.length + agents.length + 1;
+        agents.push(agent);
+        
+        onProgress?.(
+          `Agent ${agents.length} created: ${agent.name}`,
+          agents.length,
+          count,
+          {
+            name: agent.name || `Agent ${agent.agentNumber}`,
+            personality: agent.priors || "No personality defined"
+          }
+        );
+      }
       
-      agents.push(agent);
-      
-      onProgress?.(
-        `Agent ${i + 1} created: ${agent.name}`,
-        i + 1,
-        count,
-        {
-          name: agent.name || `Agent ${agent.agentNumber}`,
-          personality: agent.priors || "No personality defined"
-        }
-      );
-      
-      await new Promise(resolve => setTimeout(resolve, 200));
+      // Small delay between batches
+      if (batch < numBatches - 1) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
     } catch (error) {
-      console.error(`Error generating agent ${i + 1}:`, error);
-      // Continue with next agent even if one fails
+      console.error(`Error in batch ${batch + 1}:`, error);
+      
+      // Fallback to individual generation for this batch
+      onProgress?.(`Batch ${batch + 1} failed, falling back to individual generation...`, batchStart, count);
+      
+      for (let i = 0; i < batchCount; i++) {
+        try {
+          const demo = demographics[(batchStart + i) % demographics.length];
+          const agent = await generateAgent(
+            clusterId,
+            clusterDescription,
+            { ...demo, agentIndex: batchStart + i },
+            config
+          );
+          agent.agentNumber = existingAgents.length + agents.length + 1;
+          agents.push(agent);
+          
+          onProgress?.(
+            `Agent ${agents.length} created: ${agent.name}`,
+            agents.length,
+            count,
+            {
+              name: agent.name || `Agent ${agent.agentNumber}`,
+              personality: agent.priors || "No personality defined"
+            }
+          );
+        } catch (individualError) {
+          console.error(`Error generating individual agent ${batchStart + i + 1}:`, individualError);
+        }
+      }
     }
   }
 

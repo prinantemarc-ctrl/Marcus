@@ -20,6 +20,7 @@
     "seed": "npx tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
     "@auth/prisma-adapter": "^2.11.1",
     "@heroicons/react": "^2.0.18",
     "@prisma/client": "^5.22.0",
