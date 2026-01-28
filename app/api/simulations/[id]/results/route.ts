@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 
 // POST - Add results to a simulation
 export async function POST(
@@ -39,7 +40,7 @@ export async function POST(
 
     // Create all results
     const createdResults = await prisma.$transaction(
-      results.map((r: { agentId: string; clusterId: string; turns: unknown }) =>
+      results.map((r: { agentId: string; clusterId: string; turns: Prisma.InputJsonValue }) =>
         prisma.simulationResult.create({
           data: {
             simulationId: params.id,
