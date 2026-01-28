@@ -203,7 +203,7 @@ function expandPollResponse(
   } else if (config.responseMode === "ranking") {
     // Convert numbers array to option IDs
     const ranking = Array.isArray(compact.r) ? compact.r : [compact.r];
-    normalizedResponse = ranking
+    const rankingArray: string[] = ranking
       .map((num: number | string) => {
         const idx = (typeof num === 'number' ? num : parseInt(String(num))) - 1;
         return config.options[idx]?.id;
@@ -211,12 +211,13 @@ function expandPollResponse(
       .filter((id: string | undefined): id is string => !!id);
     
     // Ensure all options are included
-    const includedIds = new Set(normalizedResponse);
+    const includedIds = new Set(rankingArray);
     config.options.forEach(opt => {
       if (!includedIds.has(opt.id)) {
-        (normalizedResponse as string[]).push(opt.id);
+        rankingArray.push(opt.id);
       }
     });
+    normalizedResponse = rankingArray;
   } else {
     // Scoring mode - convert compact format to option IDs
     const scoringResponse: Record<string, number> = {};
