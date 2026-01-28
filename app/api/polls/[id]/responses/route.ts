@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 
 // POST - Add responses to a poll
 export async function POST(
@@ -39,7 +40,7 @@ export async function POST(
 
     // Create all responses
     const createdResponses = await prisma.$transaction(
-      responses.map((r: { agentId: string; response: unknown; reasoning?: string; confidence?: number }) =>
+      responses.map((r: { agentId: string; response: Prisma.InputJsonValue; reasoning?: string; confidence?: number }) =>
         prisma.pollResponse.create({
           data: {
             pollId: params.id,
