@@ -312,6 +312,22 @@ export type PollOption = z.infer<typeof PollOptionSchema>;
 export const PollResponseModeSchema = z.enum(["choice", "ranking", "scoring"]);
 export type PollResponseMode = z.infer<typeof PollResponseModeSchema>;
 
+// Poll (database model)
+export const PollSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  question: z.string(),
+  options: z.array(PollOptionSchema),
+  responseMode: z.string(),
+  status: z.enum(["PENDING", "RUNNING", "COMPLETED", "FAILED"]),
+  statistics: z.unknown().optional(),
+  zoneId: z.string(),
+  userId: z.string(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+export type Poll = z.infer<typeof PollSchema>;
+
 export const PollConfigSchema = z.object({
   question: z.string().min(1),
   options: z.array(PollOptionSchema).min(2),
